@@ -242,6 +242,17 @@ export default defineConfig({
     exclude: ['mock/requestRecord.mock.js'],
   },
   utoopack: {
+    /**
+     * @name 产物文件名
+     * @description 动态 chunk 与入口 CSS 不使用 [name]——turbopack 会把 [name]
+     * 展开成本机项目绝对路径转义的标识符（含用户名/目录结构），只保留内容哈希。
+     * 入口 JS 文件名（umi.[hash].js）不受影响，name 本就是 "umi"。
+     */
+    output: {
+      chunkFilename: 'async.[contenthash:8].js',
+      cssChunkFilename: 'async.[contenthash:8].css',
+      cssFilename: 'umi.[contenthash:8].css',
+    },
     module: {
       rules: {
         '*.md': {

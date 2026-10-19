@@ -316,7 +316,8 @@ function initialize() {
   const existingUsers = getAdminUsers();
   if (existingUsers.length === 0) {
     createAdminUser('admin', DEFAULT_ADMIN_PASSWORD, 'admin');
-    console.log('[db] Created default admin user: admin / ' + DEFAULT_ADMIN_PASSWORD);
+    // 不回显初始口令明文；首次登录时控制台会强制改密
+    console.log('[db] Created default admin user: admin (initial password set; must change on first login)');
   }
 
   // 迁移旧版 ISO 格式 expires_at（'...T...Z'）为 SQLite datetime 格式，

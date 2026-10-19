@@ -20,6 +20,9 @@ data.bak*/
 
 # Frontend build output (deployed copy lives in public/)
 frontend/dist/
+# Build-analysis artifact: contains local absolute paths, never publish
+public/stats.json
+frontend/dist/stats.json
 
 # Fresh-clone deploy test directories (temporary, never commit)
 .fresh-test/

@@ -261,11 +261,7 @@ function writeChatCompletionStream(res, { model, content, parsedOutput, thinking
   const created = Math.floor(Date.now() / 1000);
   const isToolCalls = parsedOutput && parsedOutput.type === 'tool_calls';
 
-  res.status(200);
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
+  beginSse(res);
 
   writeSse(res, {
     id,
@@ -529,6 +525,336 @@ async function invokeCliWithAccounts(principal, tracker, opts, runFn) {
   );
 }
 
+// ── OpenAI / Anthropic 双协议 handler 公共管道 ───────────────────────────────
+// 两个 handler 只有 SSE 帧格式不同，开场、起流、失败、收尾四个阶段的结构
+// 完全一致。凡是「重复 ≥2 次且逐行相同」的段落都收敛到这里，协议差异用
+// protocol 参数分流——否则同一处修了、另一处漏了，行为就分叉了。
+
+/**
+ * ① 断连中止。'aborted' 已废弃且部分断连场景不触发，req 'close' 在请求体
+ * 读完就会触发（并非断连），必须用 res 的 close + writableEnded 判真断连，
+ * 与 admin-api 的 test-chat/stream 同口径。
+ */
+function attachAbortOnClose(res, controller) {
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+}
+
+/**
+ * ② 用量 tracker 必须在 try 之前创建，否则 catch 分支拿不到它、失败请求
+ * 就会漏记账；两个协议的取数口径完全一致，统一从 req.body 推导。
+ */
+function createTrackerForRequest(req) {
+  return createUsageTracker({
+    userId: req.principal?.userId ?? null,
+    apiKeyId: req.principal?.apiKeyId ?? null,
+    model: req.body?.model || MODEL_ID,
+    stream: Boolean(req.body?.stream),
+    inputText: extractTextFromMessages(req.body?.messages),
+  });
+}
+
+/** 请求开场三件套：计时起点、断连中止、用量 tracker。 */
+function beginRequest(req, res) {
+  const started = Date.now();
+  const controller = new AbortController();
+  attachAbortOnClose(res, controller);
+  const tracker = createTrackerForRequest(req);
+  return { started, controller, tracker };
+}
+
+/** SSE 起流：状态码与响应头在两个协议里逐字节一致，统一在这里 flush。 */
+function beginSse(res) {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+}
+
+/**
+ * 组装 CLI 调用参数。六个调用点（两协议 × 流式/非流式）只有
+ * messages/tools/maxOutputTokens 的来源不同，其余优先级（请求级选项覆盖
+ * 账号 baseUrl）必须逐点一致，收敛到此处防止改一分支漏另一分支。
+ * onDelta 只有流式调用点才有，条件带上以保持参数对象形状不变。
+ */
+function buildCliOptions({
+  messages,
+  model,
+  tools,
+  requestOptions,
+  maxOutputTokens,
+  signal,
+  cliOpts,
+  onDelta,
+  onThinking,
+}) {
+  const options = {
+    messages,
+    model,
+    tools,
+    reasoningEffort: requestOptions.reasoningEffort,
+    contextWindow: requestOptions.contextWindow,
+    maxOutputTokens,
+    signal,
+    ...cliOpts,
+    // Per-key overrides win over the checked-in account's baseUrl.
+    baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
+    timeoutMs: requestOptions.timeoutMs,
+  };
+  if (onDelta) options.onDelta = onDelta;
+  options.onThinking = onThinking;
+  return options;
+}
+
+/**
+ * ③ 流式失败帧。headers 已经发出，错误只能以协议各自的 SSE 形式落地——
+ * OpenAI 是 data:{error} + [DONE]，Anthropic 是 error 事件——客户端据此
+ * 渲染失败，而不是静默的空消息。
+ */
+function writeStreamFailure(res, protocol, error) {
+  if (res.writableEnded) return;
+  try {
+    if (protocol === 'anthropic') {
+      writeAnthropicSse(res, 'error', {
+        type: 'error',
+        error: {
+          type: 'api_error',
+          message: error.message || 'Upstream request failed.',
+        },
+      });
+      res.end();
+    } else {
+      writeSse(res, {
+        error: {
+          message: error.message || 'Upstream request failed.',
+          type: 'server_error',
+          code: error.code || 'internal_error',
+        },
+      });
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  } catch (_) { /* ignore */ }
+}
+
+/** 流式失败的统一收尾：日志 → 用量落库 → 失败帧，顺序与原实现一致。 */
+function failStreamRequest({ res, protocol, logLabel, error, tracker, started }) {
+  log(logLabel, {
+    code: error.code || 'internal_error',
+    status: error.status || 500,
+    duration_ms: Date.now() - started,
+    message: error.message,
+  });
+  tracker.finish({
+    status: 'error',
+    errorCode: error.code || 'internal_error',
+    durationMs: Date.now() - started,
+  });
+  writeStreamFailure(res, protocol, error);
+}
+
+/**
+ * ④ 请求级失败收尾（外层 catch 专用）：日志 → 用量落库 → 审计埋点 →
+ * 协议错误响应。响应已经开始时不再写错误体（流式中途的错误由
+ * failStreamRequest 负责）。
+ */
+function finishRequestWith(req, res, error, { tracker, started, logLabel, protocol }) {
+  log(logLabel, {
+    code: error.code || 'internal_error',
+    status: error.status || 500,
+    duration_ms: Date.now() - started,
+    message: error.message,
+  });
+  tracker.finish({
+    status: 'error',
+    errorCode: error.code || 'internal_error',
+    durationMs: Date.now() - started,
+  });
+  trackRequest({
+    model: req.body?.model || MODEL_ID,
+    inputText: extractTextFromMessages(req.body?.messages),
+    outputText: '',
+    isError: true,
+  });
+  if (!res.headersSent && !res.writableEnded) {
+    if (protocol === 'anthropic') anthropicError(res, error);
+    else openAiError(res, error);
+  }
+}
+
+/**
+ * ⑤ 成功收尾：完成日志 → 用量落库 → 审计埋点，六个分支共用。
+ * trackerOutput 与 auditOutput 分开传：纯文本流的审计沿用空输出（既有口径）。
+ */
+function completeRequest(req, { tracker, started, model, logLabel, logExtra, trackerOutput, auditOutput }) {
+  log(logLabel, { duration_ms: Date.now() - started, ...logExtra });
+  tracker.finish({ outputText: trackerOutput, durationMs: Date.now() - started });
+  trackRequest({
+    model,
+    inputText: extractTextFromMessages(req.body.messages),
+    outputText: auditOutput,
+    isError: false,
+  });
+}
+
+/** OpenAI 协议：校验请求 → 解析模型与请求级选项 → 打「受理」日志。 */
+function prepareChatRequest(req) {
+  validateChatRequest(req.body);
+  const model = req.body.model || MODEL_ID;
+  const requestOptions = mergeApiKeyOptions(extractRequestOptions(req.body), req.principal);
+  const tools = Array.isArray(req.body.tools) ? req.body.tools : null;
+  const normalizedTools = tools ? normalizeOpenAiTools(tools) : null;
+  log('chat request accepted', {
+    model,
+    message_count: req.body.messages.length,
+    stream: Boolean(req.body.stream),
+    tool_count: normalizedTools ? normalizedTools.length : 0,
+    reasoning_effort: requestOptions.reasoningEffort,
+  });
+  return { model, requestOptions, normalizedTools };
+}
+
+/** Anthropic 协议：同 prepareChatRequest，另需把消息转换成 OpenAI 形态。 */
+function prepareAnthropicRequest(req) {
+  validateAnthropicMessagesRequest(req.body);
+  const model = req.body.model || MODEL_ID;
+  const requestOptions = mergeApiKeyOptions(extractRequestOptions(req.body), req.principal);
+  const { messages, tools } = anthropicToOpenAiMessages(req.body);
+  log('anthropic message request accepted', {
+    model,
+    message_count: req.body.messages.length,
+    stream: Boolean(req.body.stream),
+    tool_count: Array.isArray(req.body.tools) ? req.body.tools.length : 0,
+    reasoning_effort: requestOptions.reasoningEffort,
+  });
+  return { model, requestOptions, messages, tools };
+}
+
+/**
+ * 服务端工具循环（两协议共用）：反复调 CLI，直到回复里没有工具调用或
+ * 达到深度上限。是否真正执行工具由 SERVER_TOOL_EXECUTION 决定——默认把
+ * tool_calls 交还客户端执行，此时第一轮就会 break。日志文案两协议不同，
+ * 由调用方通过 logLabels 原样传入。
+ * 返回值沿用 OpenAI 侧命名，调用方自行映射成各自的响应结构。
+ */
+async function runToolExecutionLoop({
+  principal,
+  tracker,
+  controller,
+  messages,
+  model,
+  tools,
+  requestOptions,
+  maxOutputTokens,
+  logLabels,
+}) {
+  const workingMessages = [...messages];
+  let content = '';
+  let thinking = '';
+  let parsedOutput = null;
+  let toolCallDepth = 0;
+  const MAX_TOOL_CALL_DEPTH = 10;
+
+  while (toolCallDepth < MAX_TOOL_CALL_DEPTH) {
+    const reply = await invokeCliWithAccounts(
+      principal,
+      tracker,
+      { backendType: 'cn', rotate: true },
+      (cliOpts) =>
+        qoderCli.runQoderCnCli(
+          buildCliOptions({
+            messages: workingMessages,
+            model,
+            tools,
+            requestOptions,
+            maxOutputTokens,
+            signal: controller.signal,
+            cliOpts,
+            // 非流式：思考全文在会话结束时一次性回调（多轮取最后一轮）
+            onThinking: (roundThinking) => {
+              thinking = roundThinking;
+            },
+          })
+        )
+    );
+
+    content = reply;
+
+    // Parse the output for tool calls if tools were provided
+    let roundParsed = null;
+    if (tools) {
+      roundParsed = parseToolCallOutput(reply);
+      if (roundParsed && roundParsed.type === 'tool_calls') {
+        log(logLabels.toolCalls, {
+          tool_count: roundParsed.toolCalls.length,
+          tools: roundParsed.toolCalls.map((t) => t.name),
+        });
+      } else {
+        log(logLabels.noToolCalls, { response_type: roundParsed?.type || 'text' });
+      }
+    }
+
+    parsedOutput = roundParsed;
+
+    // If no tool calls, we're done
+    if (!roundParsed || roundParsed.type !== 'tool_calls') {
+      break;
+    }
+
+    // Default: hand tool_calls back to the client, which executes tools
+    // in its own workspace. Server-side execution only when opted in.
+    if (!isServerToolExecutionEnabled()) {
+      break;
+    }
+
+    // Execute tool calls and build tool result messages
+    const toolResults = [];
+    const assistantToolCalls = [];
+
+    for (const toolCall of roundParsed.toolCalls) {
+      const callId = generateCallId('call_');
+      assistantToolCalls.push({
+        id: callId,
+        type: 'function',
+        function: {
+          name: toolCall.name,
+          arguments: JSON.stringify(toolCall.arguments || {}),
+        },
+      });
+
+      log(logLabels.executing, { name: toolCall.name, arguments: toolCall.arguments });
+      const result = await executeToolCall(toolCall);
+      log(logLabels.toolResult, { name: toolCall.name, result });
+
+      toolResults.push({
+        role: 'tool',
+        tool_call_id: callId,
+        content: JSON.stringify(result),
+      });
+    }
+
+    // Add assistant message with tool_calls
+    workingMessages.push({
+      role: 'assistant',
+      content: roundParsed.prefixText || null,
+      tool_calls: assistantToolCalls,
+    });
+
+    // Add tool result messages
+    workingMessages.push(...toolResults);
+
+    toolCallDepth++;
+  }
+
+  if (toolCallDepth >= MAX_TOOL_CALL_DEPTH) {
+    log(logLabels.maxDepth, { depth: MAX_TOOL_CALL_DEPTH });
+  }
+
+  return { content, thinking, parsedOutput, toolCallDepth };
+}
+
 function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -747,49 +1073,22 @@ function createApp() {
   });
 
   app.post(['/v1/chat/completions', '/chat/completions', '/v1/v1/chat/completions'], async (req, res) => {
-    const started = Date.now();
-    const controller = new AbortController();
-    // 与 admin-api 的 test-chat/stream 同口径：'aborted' 已废弃且部分断连场景不触发，
-    // req 'close' 在请求体读完即会触发（非断连）——必须用 res + writableEnded 判真断连。
-    res.on('close', () => {
-      if (!res.writableEnded) controller.abort();
-    });
-    // Created before the try so the catch block can always record the outcome.
-    const tracker = createUsageTracker({
-      userId: req.principal?.userId ?? null,
-      apiKeyId: req.principal?.apiKeyId ?? null,
-      model: req.body?.model || MODEL_ID,
-      stream: Boolean(req.body?.stream),
-      inputText: extractTextFromMessages(req.body?.messages),
-    });
+    const { started, controller, tracker } = beginRequest(req, res);
 
     try {
-      validateChatRequest(req.body);
-      const model = req.body.model || MODEL_ID;
-      const requestOptions = mergeApiKeyOptions(extractRequestOptions(req.body), req.principal);
-      const tools = Array.isArray(req.body.tools) ? req.body.tools : null;
-      const normalizedTools = tools ? normalizeOpenAiTools(tools) : null;
-      log('chat request accepted', {
-        model,
-        message_count: req.body.messages.length,
-        stream: Boolean(req.body.stream),
-        tool_count: normalizedTools ? normalizedTools.length : 0,
-        reasoning_effort: requestOptions.reasoningEffort,
-      });
+      // 校验 → 选项解析 → 受理日志
+      const { model, requestOptions, normalizedTools } = prepareChatRequest(req);
 
       // True streaming: stream-json mode, real-time SSE forwarding.
       // Only when no tools are declared — with tools the model may emit a
       // tool-call JSON block that must be parsed and returned as structured
       // tool_calls, so those requests go through the buffered path below.
-      if (req.body.stream && !normalizedTools) {
+      // 纯文本流分支：无工具声明，CLI 增量直接转成 SSE chunk。
+      async function runChatPlainStream() {
         const id = `chatcmpl-${Date.now()}`;
         const created = Math.floor(Date.now() / 1000);
 
-        res.status(200);
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders?.();
+        beginSse(res);
 
         // Send role chunk first
         writeSse(res, {
@@ -803,18 +1102,14 @@ function createApp() {
         let streamedText = '';
         try {
           await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream({
+            qoderCli.runQoderCnCliStream(buildCliOptions({
               messages: req.body.messages,
               model,
               tools: normalizedTools,
-              reasoningEffort: requestOptions.reasoningEffort,
-              contextWindow: requestOptions.contextWindow,
+              requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens,
               signal: controller.signal,
-              ...cliOpts,
-              // Per-key overrides win over the checked-in account's baseUrl.
-              baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
-              timeoutMs: requestOptions.timeoutMs,
+              cliOpts,
               onDelta: (delta) => {
                 streamedText += delta;
                 writeSse(res, {
@@ -835,35 +1130,11 @@ function createApp() {
                   choices: [{ index: 0, delta: { reasoning_content: thinking }, finish_reason: null }],
                 });
               },
-            })
+            }))
           );
         } catch (streamError) {
-          log('chat stream failed', {
-            code: streamError.code || 'internal_error',
-            status: streamError.status || 500,
-            duration_ms: Date.now() - started,
-            message: streamError.message,
-          });
-          tracker.finish({
-            status: 'error',
-            errorCode: streamError.code || 'internal_error',
-            durationMs: Date.now() - started,
-          });
-          // Headers are already sent — surface the error as an SSE event so
-          // clients render a failure instead of a silent empty message.
-          if (!res.writableEnded) {
-            try {
-              writeSse(res, {
-                error: {
-                  message: streamError.message || 'Upstream request failed.',
-                  type: 'server_error',
-                  code: streamError.code || 'internal_error',
-                },
-              });
-              res.write('data: [DONE]\n\n');
-              res.end();
-            } catch (_) { /* ignore */ }
-          }
+          // headers 已发出，错误只能以 SSE 帧形式带回（见 writeStreamFailure）
+          failStreamRequest({ res, protocol: 'openai', logLabel: 'chat stream failed', error: streamError, tracker, started });
           return;
         }
 
@@ -876,14 +1147,12 @@ function createApp() {
         });
         res.write('data: [DONE]\n\n');
         res.end();
-        log('chat stream completed', { duration_ms: Date.now() - started });
-        tracker.finish({ outputText: streamedText, durationMs: Date.now() - started });
-        trackRequest({
-          model,
-          inputText: extractTextFromMessages(req.body.messages),
-          outputText: '',
-          isError: false,
-        });
+        completeRequest(req, { tracker, started, model, logLabel: 'chat stream completed', trackerOutput: streamedText, auditOutput: '' });
+        return;
+      }
+
+      if (req.body.stream && !normalizedTools) {
+        await runChatPlainStream();
         return;
       }
 
@@ -893,20 +1162,11 @@ function createApp() {
       // text is parsed and tool calls are appended as structured blocks.
       // (Skipped when server-side tool execution is enabled — the multi-round
       // tool loop below stays buffered.)
-      if (
-        req.body.stream &&
-        normalizedTools &&
-        normalizedTools.length &&
-        !isServerToolExecutionEnabled()
-      ) {
+      async function runChatToolGatedStream() {
         const id = `chatcmpl-${Date.now()}`;
         const created = Math.floor(Date.now() / 1000);
 
-        res.status(200);
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders?.();
+        beginSse(res);
 
         writeSse(res, {
           id,
@@ -931,18 +1191,14 @@ function createApp() {
 
         try {
           await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream({
+            qoderCli.runQoderCnCliStream(buildCliOptions({
               messages: req.body.messages,
               model,
               tools: normalizedTools,
-              reasoningEffort: requestOptions.reasoningEffort,
-              contextWindow: requestOptions.contextWindow,
+              requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens,
               signal: controller.signal,
-              ...cliOpts,
-              // Per-key overrides win over the checked-in account's baseUrl.
-              baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
-              timeoutMs: requestOptions.timeoutMs,
+              cliOpts,
               onDelta: (delta) => {
                 fullText += delta;
                 const safeLength = findStreamingSafePrefixLength(fullText);
@@ -962,35 +1218,11 @@ function createApp() {
                   choices: [{ index: 0, delta: { reasoning_content: thinking }, finish_reason: null }],
                 });
               },
-            })
+            }))
           );
         } catch (streamError) {
-          log('chat stream failed', {
-            code: streamError.code || 'internal_error',
-            status: streamError.status || 500,
-            duration_ms: Date.now() - started,
-            message: streamError.message,
-          });
-          tracker.finish({
-            status: 'error',
-            errorCode: streamError.code || 'internal_error',
-            durationMs: Date.now() - started,
-          });
-          // Headers are already sent — surface the error as an SSE event so
-          // clients render a failure instead of a silent empty message.
-          if (!res.writableEnded) {
-            try {
-              writeSse(res, {
-                error: {
-                  message: streamError.message || 'Upstream request failed.',
-                  type: 'server_error',
-                  code: streamError.code || 'internal_error',
-                },
-              });
-              res.write('data: [DONE]\n\n');
-              res.end();
-            } catch (_) { /* ignore */ }
-          }
+          // headers 已发出，错误只能以 SSE 帧形式带回（见 writeStreamFailure）
+          failStreamRequest({ res, protocol: 'openai', logLabel: 'chat stream failed', error: streamError, tracker, started });
           return;
         }
 
@@ -1063,213 +1295,94 @@ function createApp() {
         });
         res.write('data: [DONE]\n\n');
         res.end();
-        log('chat stream completed', {
-          duration_ms: Date.now() - started,
-          with_tools: true,
-          tool_calls: isToolCalls ? parsedOutput.toolCalls.length : 0,
-        });
-        tracker.finish({ outputText: fullText, durationMs: Date.now() - started });
-        trackRequest({
+        completeRequest(req, {
+          tracker,
+          started,
           model,
-          inputText: extractTextFromMessages(req.body.messages),
-          outputText: fullText,
-          isError: false,
+          logLabel: 'chat stream completed',
+          logExtra: { with_tools: true, tool_calls: isToolCalls ? parsedOutput.toolCalls.length : 0 },
+          trackerOutput: fullText,
+          auditOutput: fullText,
         });
         return;
       }
 
-      // Non-streaming path (or tool calls with stream=true → downgraded)
-      // Build working messages for potential tool-call loops
-      let workingMessages = [...req.body.messages];
-      let finalContent = '';
-      let finalThinking = '';
-      let finalParsedOutput = null;
-      let toolCallDepth = 0;
-      const MAX_TOOL_CALL_DEPTH = 10;
-
-      while (toolCallDepth < MAX_TOOL_CALL_DEPTH) {
-        const content = await invokeCliWithAccounts(
-          req.principal,
-          tracker,
-          { backendType: 'cn', rotate: true },
-          (cliOpts) =>
-            qoderCli.runQoderCnCli({
-              messages: workingMessages,
-              model,
-              tools: normalizedTools,
-              reasoningEffort: requestOptions.reasoningEffort,
-              contextWindow: requestOptions.contextWindow,
-              maxOutputTokens: requestOptions.maxOutputTokens,
-              signal: controller.signal,
-              ...cliOpts,
-              // Per-key overrides win over the checked-in account's baseUrl.
-              baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
-              timeoutMs: requestOptions.timeoutMs,
-              // 非流式：思考全文在会话结束时一次性回调（多轮取最后一轮）
-              onThinking: (thinking) => {
-                finalThinking = thinking;
-              },
-            })
-        );
-
-        finalContent = content;
-
-        // Parse the output for tool calls if tools were provided
-        let parsedOutput = null;
-        if (normalizedTools) {
-          parsedOutput = parseToolCallOutput(content);
-          if (parsedOutput && parsedOutput.type === 'tool_calls') {
-            log('chat tool calls detected', {
-              tool_count: parsedOutput.toolCalls.length,
-              tools: parsedOutput.toolCalls.map((t) => t.name),
-            });
-          } else {
-            log('chat no tool calls detected', { response_type: parsedOutput?.type || 'text' });
-          }
-        }
-
-        finalParsedOutput = parsedOutput;
-
-        // If no tool calls, we're done
-        if (!parsedOutput || parsedOutput.type !== 'tool_calls') {
-          break;
-        }
-
-        // Default: hand tool_calls back to the client, which executes tools
-        // in its own workspace. Server-side execution only when opted in.
-        if (!isServerToolExecutionEnabled()) {
-          break;
-        }
-
-        // Execute tool calls and build tool result messages
-        const toolResults = [];
-        const assistantToolCalls = [];
-
-        for (const toolCall of parsedOutput.toolCalls) {
-          const callId = generateCallId('call_');
-          assistantToolCalls.push({
-            id: callId,
-            type: 'function',
-            function: {
-              name: toolCall.name,
-              arguments: JSON.stringify(toolCall.arguments || {}),
-            },
-          });
-
-          log('executing tool', { name: toolCall.name, arguments: toolCall.arguments });
-          const result = await executeToolCall(toolCall);
-          log('tool result', { name: toolCall.name, result });
-
-          toolResults.push({
-            role: 'tool',
-            tool_call_id: callId,
-            content: JSON.stringify(result),
-          });
-        }
-
-        // Add assistant message with tool_calls
-        workingMessages.push({
-          role: 'assistant',
-          content: parsedOutput.prefixText || null,
-          tool_calls: assistantToolCalls,
-        });
-
-        // Add tool result messages
-        workingMessages.push(...toolResults);
-
-        toolCallDepth++;
+      if (
+        req.body.stream &&
+        normalizedTools &&
+        normalizedTools.length &&
+        !isServerToolExecutionEnabled()
+      ) {
+        await runChatToolGatedStream();
+        return;
       }
 
-      if (toolCallDepth >= MAX_TOOL_CALL_DEPTH) {
-        log('warning: max tool call depth reached', { depth: MAX_TOOL_CALL_DEPTH });
-      }
+      // 非流式（或声明了工具的 stream=true 降级路径）：多轮工具循环收敛在
+      // runToolExecutionLoop，这里只负责把最终结果按请求形态写回。
+      const final = await runToolExecutionLoop({
+        principal: req.principal,
+        tracker,
+        controller,
+        messages: req.body.messages,
+        model,
+        tools: normalizedTools,
+        requestOptions,
+        maxOutputTokens: requestOptions.maxOutputTokens,
+        // 日志文案沿用 chat 前缀，避免改动既有日志检索口径
+        logLabels: {
+          toolCalls: 'chat tool calls detected',
+          noToolCalls: 'chat no tool calls detected',
+          executing: 'executing tool',
+          toolResult: 'tool result',
+          maxDepth: 'warning: max tool call depth reached',
+        },
+      });
 
       if (req.body.stream) {
         // Buffered request (tools declared) — emit the parsed result as a
         // proper SSE stream, including delta.tool_calls when applicable.
-        writeChatCompletionStream(res, { model, content: finalContent, parsedOutput: finalParsedOutput, thinking: finalThinking });
+        writeChatCompletionStream(res, { model, content: final.content, parsedOutput: final.parsedOutput, thinking: final.thinking });
       } else {
         res.json(
           createChatCompletion({
             model,
-            content: finalContent,
-            parsedOutput: finalParsedOutput,
-            usage: tracker.snapshot(finalContent || ''),
-            thinking: finalThinking,
+            content: final.content,
+            parsedOutput: final.parsedOutput,
+            usage: tracker.snapshot(final.content || ''),
+            thinking: final.thinking,
           }),
         );
       }
-      log('chat request completed', { duration_ms: Date.now() - started, tool_call_depth: toolCallDepth });
-      tracker.finish({ outputText: finalContent || '', durationMs: Date.now() - started });
-      trackRequest({
+      completeRequest(req, {
+        tracker,
+        started,
         model,
-        inputText: extractTextFromMessages(req.body.messages),
-        outputText: finalContent || '',
-        isError: false,
+        logLabel: 'chat request completed',
+        logExtra: { tool_call_depth: final.toolCallDepth },
+        trackerOutput: final.content || '',
+        auditOutput: final.content || '',
       });
     } catch (error) {
-      log('chat request failed', {
-        code: error.code || 'internal_error',
-        status: error.status || 500,
-        duration_ms: Date.now() - started,
-        message: error.message,
-      });
-      tracker.finish({
-        status: 'error',
-        errorCode: error.code || 'internal_error',
-        durationMs: Date.now() - started,
-      });
-      trackRequest({
-        model: req.body?.model || MODEL_ID,
-        inputText: extractTextFromMessages(req.body?.messages),
-        outputText: '',
-        isError: true,
-      });
-      if (!res.headersSent && !res.writableEnded) openAiError(res, error);
+      finishRequestWith(req, res, error, { tracker, started, logLabel: 'chat request failed', protocol: 'openai' });
     }
   });
 
   app.post(['/v1/messages', '/messages', '/v1/v1/messages'], async (req, res) => {
-    const started = Date.now();
-    const controller = new AbortController();
-    // 同 /v1/chat/completions：res close + writableEnded 判真断连（req 'aborted' 已废弃）
-    res.on('close', () => {
-      if (!res.writableEnded) controller.abort();
-    });
-    // Created before the try so the catch block can always record the outcome.
-    const tracker = createUsageTracker({
-      userId: req.principal?.userId ?? null,
-      apiKeyId: req.principal?.apiKeyId ?? null,
-      model: req.body?.model || MODEL_ID,
-      stream: Boolean(req.body?.stream),
-      inputText: extractTextFromMessages(req.body?.messages),
-    });
+    const { started, controller, tracker } = beginRequest(req, res);
 
     try {
-      validateAnthropicMessagesRequest(req.body);
-      const model = req.body.model || MODEL_ID;
-      const requestOptions = mergeApiKeyOptions(extractRequestOptions(req.body), req.principal);
-      const { messages, tools } = anthropicToOpenAiMessages(req.body);
-      log('anthropic message request accepted', {
-        model,
-        message_count: req.body.messages.length,
-        stream: Boolean(req.body.stream),
-        tool_count: Array.isArray(req.body.tools) ? req.body.tools.length : 0,
-        reasoning_effort: requestOptions.reasoningEffort,
-      });
+      // 校验 → 消息转换 → 选项解析 → 受理日志
+      const { model, requestOptions, messages, tools } = prepareAnthropicRequest(req);
 
       // True streaming: stream-json mode, real-time SSE forwarding.
       // Only when no tools are declared — with tools the model may emit a
       // tool-call JSON block that must be parsed and returned as structured
       // tool_use blocks, so those requests go through the buffered path below.
-      if (req.body.stream && !(tools && tools.length)) {
+      // 纯文本流分支：无 tool_use 块，content/thinking 块按需惰性开启。
+      async function runMessagePlainStream() {
         const msgId = `msg_${Date.now()}`;
 
-        res.status(200);
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders?.();
+        beginSse(res);
 
         writeAnthropicSse(res, 'message_start', {
           type: 'message_start',
@@ -1324,18 +1437,14 @@ function createApp() {
         let streamedText = '';
         try {
           await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream({
+            qoderCli.runQoderCnCliStream(buildCliOptions({
               messages,
               model,
               tools,
-              reasoningEffort: requestOptions.reasoningEffort,
-              contextWindow: requestOptions.contextWindow,
+              requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,
               signal: controller.signal,
-              ...cliOpts,
-              // Per-key overrides win over the checked-in account's baseUrl.
-              baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
-              timeoutMs: requestOptions.timeoutMs,
+              cliOpts,
               onDelta: (delta) => {
                 streamedText += delta;
                 openTextBlock();
@@ -1353,34 +1462,11 @@ function createApp() {
                   delta: { type: 'thinking_delta', thinking },
                 });
               },
-            })
+            }))
           );
         } catch (streamError) {
-          log('anthropic stream failed', {
-            code: streamError.code || 'internal_error',
-            status: streamError.status || 500,
-            duration_ms: Date.now() - started,
-            message: streamError.message,
-          });
-          tracker.finish({
-            status: 'error',
-            errorCode: streamError.code || 'internal_error',
-            durationMs: Date.now() - started,
-          });
-          // Headers are already sent — surface the error as an SSE error
-          // event so clients render a failure instead of an empty message.
-          if (!res.writableEnded) {
-            try {
-              writeAnthropicSse(res, 'error', {
-                type: 'error',
-                error: {
-                  type: 'api_error',
-                  message: streamError.message || 'Upstream request failed.',
-                },
-              });
-              res.end();
-            } catch (_) { /* ignore */ }
-          }
+          // headers 已发出，错误只能以 SSE 事件形式带回（见 writeStreamFailure）
+          failStreamRequest({ res, protocol: 'anthropic', logLabel: 'anthropic stream failed', error: streamError, tracker, started });
           return;
         }
 
@@ -1408,14 +1494,12 @@ function createApp() {
         });
         writeAnthropicSse(res, 'message_stop', { type: 'message_stop' });
         res.end();
-        log('anthropic stream completed', { duration_ms: Date.now() - started });
-        tracker.finish({ outputText: streamedText, durationMs: Date.now() - started });
-        trackRequest({
-          model,
-          inputText: extractTextFromMessages(req.body.messages),
-          outputText: '',
-          isError: false,
-        });
+        completeRequest(req, { tracker, started, model, logLabel: 'anthropic stream completed', trackerOutput: streamedText, auditOutput: '' });
+        return;
+      }
+
+      if (req.body.stream && !(tools && tools.length)) {
+        await runMessagePlainStream();
         return;
       }
 
@@ -1424,19 +1508,10 @@ function createApp() {
       // back and appended as structured tool_use blocks after the stream
       // completes. The text block only opens when text actually arrives, so
       // a pure tool-call reply carries no empty text block.
-      if (
-        req.body.stream &&
-        tools &&
-        tools.length &&
-        !isServerToolExecutionEnabled()
-      ) {
+      async function runMessageToolGatedStream() {
         const msgId = `msg_${Date.now()}`;
 
-        res.status(200);
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders?.();
+        beginSse(res);
 
         writeAnthropicSse(res, 'message_start', {
           type: 'message_start',
@@ -1502,18 +1577,14 @@ function createApp() {
 
         try {
           await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream({
+            qoderCli.runQoderCnCliStream(buildCliOptions({
               messages,
               model,
               tools,
-              reasoningEffort: requestOptions.reasoningEffort,
-              contextWindow: requestOptions.contextWindow,
+              requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,
               signal: controller.signal,
-              ...cliOpts,
-              // Per-key overrides win over the checked-in account's baseUrl.
-              baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
-              timeoutMs: requestOptions.timeoutMs,
+              cliOpts,
               onDelta: (delta) => {
                 fullText += delta;
                 const safeLength = findStreamingSafePrefixLength(fullText);
@@ -1523,34 +1594,11 @@ function createApp() {
                 }
               },
               onThinking: writeThinkingDelta,
-            })
+            }))
           );
         } catch (streamError) {
-          log('anthropic stream failed', {
-            code: streamError.code || 'internal_error',
-            status: streamError.status || 500,
-            duration_ms: Date.now() - started,
-            message: streamError.message,
-          });
-          tracker.finish({
-            status: 'error',
-            errorCode: streamError.code || 'internal_error',
-            durationMs: Date.now() - started,
-          });
-          // Headers are already sent — surface the error as an SSE error
-          // event so clients render a failure instead of an empty message.
-          if (!res.writableEnded) {
-            try {
-              writeAnthropicSse(res, 'error', {
-                type: 'error',
-                error: {
-                  type: 'api_error',
-                  message: streamError.message || 'Upstream request failed.',
-                },
-              });
-              res.end();
-            } catch (_) { /* ignore */ }
-          }
+          // headers 已发出，错误只能以 SSE 事件形式带回（见 writeStreamFailure）
+          failStreamRequest({ res, protocol: 'anthropic', logLabel: 'anthropic stream failed', error: streamError, tracker, started });
           return;
         }
 
@@ -1632,169 +1680,75 @@ function createApp() {
         });
         writeAnthropicSse(res, 'message_stop', { type: 'message_stop' });
         res.end();
-        log('anthropic stream completed', {
-          duration_ms: Date.now() - started,
-          with_tools: true,
-          tool_calls: isToolCalls ? parsedOutput.toolCalls.length : 0,
-        });
-        tracker.finish({ outputText: fullText, durationMs: Date.now() - started });
-        trackRequest({
+        completeRequest(req, {
+          tracker,
+          started,
           model,
-          inputText: extractTextFromMessages(req.body.messages),
-          outputText: fullText,
-          isError: false,
+          logLabel: 'anthropic stream completed',
+          logExtra: { with_tools: true, tool_calls: isToolCalls ? parsedOutput.toolCalls.length : 0 },
+          trackerOutput: fullText,
+          auditOutput: fullText,
         });
         return;
       }
 
-      // Non-streaming path (or tool calls with stream=true → downgraded)
-      // Build working messages for potential tool-call loops
-      let workingMessagesAnthropic = [...messages];
-      let anthropicContent = '';
-      let anthropicThinking = '';
-      let anthropicParsedOutput = null;
-      let anthropicToolDepth = 0;
-      const MAX_ANTHROPIC_TOOL_DEPTH = 10;
-
-      while (anthropicToolDepth < MAX_ANTHROPIC_TOOL_DEPTH) {
-        const content = await invokeCliWithAccounts(
-          req.principal,
-          tracker,
-          { backendType: 'cn', rotate: true },
-          (cliOpts) =>
-            qoderCli.runQoderCnCli({
-              messages: workingMessagesAnthropic,
-              model,
-              tools,
-              reasoningEffort: requestOptions.reasoningEffort,
-              contextWindow: requestOptions.contextWindow,
-              maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,
-              signal: controller.signal,
-              ...cliOpts,
-              // Per-key overrides win over the checked-in account's baseUrl.
-              baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
-              timeoutMs: requestOptions.timeoutMs,
-              // 非流式：思考全文在会话结束时一次性回调（多轮取最后一轮）
-              onThinking: (thinking) => {
-                anthropicThinking = thinking;
-              },
-            })
-        );
-
-        anthropicContent = content;
-
-        // Parse the output for tool calls if tools were provided
-        let parsedOutput = null;
-        if (tools) {
-          parsedOutput = parseToolCallOutput(content);
-          if (parsedOutput && parsedOutput.type === 'tool_calls') {
-            log('anthropic tool calls detected', {
-              tool_count: parsedOutput.toolCalls.length,
-              tools: parsedOutput.toolCalls.map((t) => t.name),
-            });
-          } else {
-            log('anthropic no tool calls detected', { response_type: parsedOutput?.type || 'text' });
-          }
-        }
-
-        anthropicParsedOutput = parsedOutput;
-
-        // If no tool calls, we're done
-        if (!parsedOutput || parsedOutput.type !== 'tool_calls') {
-          break;
-        }
-
-        // Default: hand tool_use blocks back to the client, which executes
-        // tools in its own workspace. Server-side execution only when opted in.
-        if (!isServerToolExecutionEnabled()) {
-          break;
-        }
-
-        // Execute tool calls and build tool result messages
-        const toolResults = [];
-        const assistantToolCalls = [];
-
-        for (const toolCall of parsedOutput.toolCalls) {
-          const callId = generateCallId('call_');
-          assistantToolCalls.push({
-            id: callId,
-            type: 'function',
-            function: {
-              name: toolCall.name,
-              arguments: JSON.stringify(toolCall.arguments || {}),
-            },
-          });
-
-          log('executing anthropic tool', { name: toolCall.name, arguments: toolCall.arguments });
-          const result = await executeToolCall(toolCall);
-          log('anthropic tool result', { name: toolCall.name, result });
-
-          toolResults.push({
-            role: 'tool',
-            tool_call_id: callId,
-            content: JSON.stringify(result),
-          });
-        }
-
-        // Add assistant message with tool_calls
-        workingMessagesAnthropic.push({
-          role: 'assistant',
-          content: parsedOutput.prefixText || null,
-          tool_calls: assistantToolCalls,
-        });
-
-        // Add tool result messages
-        workingMessagesAnthropic.push(...toolResults);
-
-        anthropicToolDepth++;
+      if (
+        req.body.stream &&
+        tools &&
+        tools.length &&
+        !isServerToolExecutionEnabled()
+      ) {
+        await runMessageToolGatedStream();
+        return;
       }
 
-      if (anthropicToolDepth >= MAX_ANTHROPIC_TOOL_DEPTH) {
-        log('warning: max anthropic tool call depth reached', { depth: MAX_ANTHROPIC_TOOL_DEPTH });
-      }
+      // 非流式（或声明了工具的 stream=true 降级路径）：与 OpenAI 共用工具
+      // 循环，仅日志文案与 maxOutputTokens 口径按 Anthropic 协议传入。
+      const final = await runToolExecutionLoop({
+        principal: req.principal,
+        tracker,
+        controller,
+        messages,
+        model,
+        tools,
+        requestOptions,
+        maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,
+        // 日志文案沿用 anthropic 前缀，避免改动既有日志检索口径
+        logLabels: {
+          toolCalls: 'anthropic tool calls detected',
+          noToolCalls: 'anthropic no tool calls detected',
+          executing: 'executing anthropic tool',
+          toolResult: 'anthropic tool result',
+          maxDepth: 'warning: max anthropic tool call depth reached',
+        },
+      });
 
       if (req.body.stream) {
         // Buffered request (tools declared) — emit the parsed result as a
         // proper SSE stream, including tool_use blocks when applicable.
-        writeAnthropicMessageStream(res, { model, content: anthropicContent, parsedOutput: anthropicParsedOutput, thinking: anthropicThinking });
+        writeAnthropicMessageStream(res, { model, content: final.content, parsedOutput: final.parsedOutput, thinking: final.thinking });
       } else {
         res.json(
           createAnthropicMessage({
             model,
-            content: anthropicContent,
-            parsedOutput: anthropicParsedOutput,
-            usage: tracker.snapshot(anthropicContent || ''),
-            thinking: anthropicThinking,
+            content: final.content,
+            parsedOutput: final.parsedOutput,
+            usage: tracker.snapshot(final.content || ''),
+            thinking: final.thinking,
           }),
         );
       }
-      log('anthropic message request completed', { duration_ms: Date.now() - started, tool_call_depth: anthropicToolDepth });
-      tracker.finish({ outputText: anthropicContent || '', durationMs: Date.now() - started });
-      trackRequest({
+      completeRequest(req, {
+        tracker,
+        started,
         model,
-        inputText: extractTextFromMessages(req.body.messages),
-        outputText: anthropicContent || '',
-        isError: false,
+        logLabel: 'anthropic message request completed',
+        logExtra: { tool_call_depth: final.toolCallDepth },
+        trackerOutput: final.content || '',
+        auditOutput: final.content || '',
       });
     } catch (error) {
-      log('anthropic message request failed', {
-        code: error.code || 'internal_error',
-        status: error.status || 500,
-        duration_ms: Date.now() - started,
-        message: error.message,
-      });
-      tracker.finish({
-        status: 'error',
-        errorCode: error.code || 'internal_error',
-        durationMs: Date.now() - started,
-      });
-      trackRequest({
-        model: req.body?.model || MODEL_ID,
-        inputText: extractTextFromMessages(req.body?.messages),
-        outputText: '',
-        isError: true,
-      });
-      if (!res.headersSent && !res.writableEnded) anthropicError(res, error);
+      finishRequestWith(req, res, error, { tracker, started, logLabel: 'anthropic message request failed', protocol: 'anthropic' });
     }
   });
 

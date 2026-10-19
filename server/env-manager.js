@@ -107,32 +107,9 @@ function writeEnvBatch(updates) {
   }
 }
 
-/**
- * 获取掩码后的 key（用于前端显示）
- * @param {string} key - 原始 key
- * @returns {string} 掩码后的 key
- */
-function maskKey(key) {
-  if (!key) return '';
-  if (key.length <= 8) return '****';
-  return key.slice(0, 4) + '****' + key.slice(-4);
-}
-
-/**
- * 获取敏感字段列表（用于前端判断是否隐藏）
- * @param {string} key - 环境变量名
- * @returns {boolean} 是否敏感
- */
-function isSensitiveKey(key) {
-  const sensitivePatterns = ['TOKEN', 'KEY', 'SECRET', 'PASSWORD', 'PAT'];
-  return sensitivePatterns.some(pattern => key.includes(pattern));
-}
-
 module.exports = {
   readEnv,
   writeEnv,
   writeEnvBatch,
-  maskKey,
-  isSensitiveKey,
   ENV_PATH,
 };

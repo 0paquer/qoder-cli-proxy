@@ -74,8 +74,8 @@ const LoginPage: React.FC = () => {
       return;
     }
     setInitialState((s) => ({ ...s, currentUser: me }));
-    // 仅在完整登录成功（含管理员校验通过）后更新记住的凭据
-    setRememberedLogin(remember && password ? { username, password } : null);
+    // 仅在完整登录成功（含管理员校验通过）后更新记住的用户名（不存密码）
+    setRememberedLogin(remember && password ? { username } : null);
     message.success('登录成功');
     // redirect 参数来自 getInitialState/onPageChange，值含生产 base 前缀（/ui），
     // 而 history.replace 会自动拼 base——先剥掉，避免 /ui/ui/... 双拼落到空白页
@@ -225,7 +225,6 @@ const LoginPage: React.FC = () => {
               requiredMark={false}
               initialValues={{
                 username: remembered?.username,
-                password: remembered?.password,
                 remember: Boolean(remembered),
               }}
             >
@@ -250,7 +249,7 @@ const LoginPage: React.FC = () => {
                 />
               </Form.Item>
               <Form.Item name="remember" valuePropName="checked" className="mb-5">
-                <Checkbox className="text-sm text-gray-500">记住密码</Checkbox>
+                <Checkbox className="text-sm text-gray-500">记住用户名</Checkbox>
               </Form.Item>
               <Form.Item className="mb-0 pt-1">
                 <Button

@@ -11,18 +11,22 @@ export const clearToken = (): void => {
   localStorage.removeItem(TOKEN_KEY);
 };
 
-/** 「记住密码」的 localStorage 键名（仅本机控制台使用）。 */
+/** 「记住用户名」的 localStorage 键名（仅本机控制台使用；出于安全只存用户名，不存密码）。 */
 const REMEMBER_KEY = 'qoder_proxy_remembered_login';
 
-export type RememberedLogin = { username: string; password: string };
+export type RememberedLogin = { username: string };
 
 export const getRememberedLogin = (): RememberedLogin | null => {
   try {
     const raw = localStorage.getItem(REMEMBER_KEY);
     if (!raw) return null;
-    const saved = JSON.parse(raw) as Partial<RememberedLogin>;
-    if (saved?.username && saved?.password) {
-      return { username: saved.username, password: saved.password };
+    const saved = JSON.parse(raw) as { username?: string; password?: string };
+    if (saved?.username) {
+      // 旧版本曾明文保存 password：读到即覆写清除，绝不再返回密码字段。
+      if (saved.password) {
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ username: saved.username }));
+      }
+      return { username: saved.username };
     }
   } catch {
     /* 数据损坏时按未记住处理 */
@@ -31,7 +35,7 @@ export const getRememberedLogin = (): RememberedLogin | null => {
 };
 
 export const setRememberedLogin = (value: RememberedLogin | null): void => {
-  if (value) localStorage.setItem(REMEMBER_KEY, JSON.stringify(value));
+  if (value) localStorage.setItem(REMEMBER_KEY, JSON.stringify({ username: value.username }));
   else localStorage.removeItem(REMEMBER_KEY);
 };
 

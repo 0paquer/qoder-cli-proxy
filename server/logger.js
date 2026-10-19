@@ -44,13 +44,17 @@ console.log = (...args) => {
 console.warn = (...args) => {
   try {
     pushEntry('warn', args);
-  } catch (_) {}
+  } catch (_) {
+    // 缓冲失败不影响真实输出
+  }
   emit('warn', args);
 };
 console.error = (...args) => {
   try {
     pushEntry('error', args);
-  } catch (_) {}
+  } catch (_) {
+    // 缓冲失败不影响真实输出
+  }
   emit('error', args);
 };
 

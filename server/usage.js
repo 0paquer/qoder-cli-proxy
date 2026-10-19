@@ -116,8 +116,8 @@ function resetUsage() {
     if (fs.existsSync(USAGE_FILE)) {
       fs.unlinkSync(USAGE_FILE);
     }
-  } catch (_) {
-    // Silent fail
+  } catch (err) {
+    console.warn('[usage] failed to clear usage file:', err.message);
   }
 }
 
@@ -125,8 +125,8 @@ function saveUsage() {
   try {
     const data = JSON.stringify(getUsage(), null, 2);
     fs.writeFileSync(USAGE_FILE, data, 'utf8');
-  } catch (_) {
-    // Silent fail
+  } catch (err) {
+    console.warn('[usage] failed to save usage file:', err.message);
   }
 }
 
@@ -146,8 +146,9 @@ function loadUsage() {
         stats.estimatedTotalTokens = data.estimatedTotalTokens || 0;
       }
     }
-  } catch (_) {
-    // Silent fail, use defaults
+  } catch (err) {
+    // 数据损坏时回退默认值继续运行，但必须留痕可排查
+    console.warn('[usage] failed to load usage file, using defaults:', err.message);
   }
 }
 

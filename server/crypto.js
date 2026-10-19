@@ -106,20 +106,9 @@ function fingerprintSecret(plaintext) {
   return value.length <= 4 ? value : value.slice(-4);
 }
 
-/** Add a new key version (rotation). Existing ciphertexts stay decryptable. */
-function rotateKey() {
-  const file = loadKeyFile();
-  const version = latestKeyVersion() + 1;
-  file.keys.push({ version, key: crypto.randomBytes(32).toString('hex') });
-  fs.writeFileSync(KEY_FILE, JSON.stringify(file, null, 2), { mode: 0o600 });
-  return version;
-}
-
 module.exports = {
   encryptSecret,
   decryptSecret,
   fingerprintSecret,
-  rotateKey,
-  latestKeyVersion,
   KEY_FILE,
 };
