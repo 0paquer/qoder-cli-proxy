@@ -60,9 +60,11 @@ anything that can reach the proxy, so pair it with `PROXY_API_KEY`.
 
 ## Handling your token
 
-- Keep `QODERCN_PERSONAL_ACCESS_TOKEN` / `QODER_PAT` in `.env`, which is
-  gitignored. Never commit it, never paste it into an issue or screenshot.
+- Qoder account PATs are not stored in `.env`. Add accounts in the admin
+  console — each PAT is encrypted (AES-256-GCM) at rest in SQLite. Never paste
+  a PAT into an issue, screenshot, or third-party client.
 - Logs are redacted for tokens, cookies, and `Authorization` headers, but
   redaction is a safety net, not a guarantee — read before you post.
-- If you suspect your token leaked, revoke it on the official Qoder account page
-  and create a new one immediately.
+- If you suspect your token leaked, revoke it on the official Qoder account
+  page, then update it in the admin console's Accounts page (replacing a PAT
+  resets the account's verification status).

@@ -63,21 +63,22 @@ npm install
 Copy-Item .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` (optional, for port and gateway auth basics):
 
 ```env
 # Choose backend: "cn" or "global"
 CLI_BACKEND=cn
 
-# CN backend: your Personal Access Token
-QODERCN_PERSONAL_ACCESS_TOKEN=your-cn-token
-
-# Global backend: no token needed after running qodercli login
+# Gateway API key (recommended, protects your Qoder quota)
+PROXY_API_KEY=
 ```
 
-CN PAT page: https://qoder.com.cn/account/integrations
+> **Qoder account PATs do NOT go into `.env`.** After starting, add accounts
+> in the admin console (Accounts page). Each account's PAT is encrypted
+> (AES-256-GCM) and stored in SQLite. CN PAT page:
+> https://qoder.com.cn/account/integrations
 
-Store it securely. Do not commit `.env` to Git, and do not enter your Token into third-party clients or share it with others.
+Store tokens securely. Do not commit `.env` to Git, and do not enter your Token into third-party clients or share it with others.
 
 **Step 3: start**
 
@@ -188,7 +189,7 @@ Switch backends via `CLI_BACKEND` in `.env`; restart to take effect:
 | CLI command | `qoderclicn` | `qodercli` |
 | Auth method | Personal Access Token | `qodercli login` (OAuth) |
 | Auth directory | `~/.qoderworkcn` | `~/.qoder` |
-| Environment variable | `QODERCN_PERSONAL_ACCESS_TOKEN` | Not required (auto-auth after login) |
+| PAT config | Accounts page in the admin console (AES-256-GCM encrypted in DB) | Not required (auto-auth after login) |
 
 ### Reasoning Options
 
@@ -262,9 +263,9 @@ If a local web app legitimately needs browser access, allow it explicitly with `
 
 ### Upstream Authentication
 
-| Backend | Auth Method | Environment Variable |
+| Backend | Auth Method | PAT Config |
 |---------|------------|--------------------|
-| CN (`qoderclicn`) | Personal Access Token | `QODERCN_PERSONAL_ACCESS_TOKEN` |
+| CN (`qoderclicn`) | Personal Access Token | Accounts page in the admin console (AES-256-GCM encrypted in DB, per account) |
 | Global (`qodercli`) | OAuth login (`qodercli login`) | Not required |
 
 ### Server-Side Tool Execution (off by default)

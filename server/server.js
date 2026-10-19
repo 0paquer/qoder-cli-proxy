@@ -96,7 +96,6 @@ function startServer(attempt = 0) {
       name: backend.name,
       command: backend.command,
       home: backend.homeDir,
-      token_configured: Boolean(process.env[backend.tokenEnvVar] || process.env.QODERCN_PERSONAL_ACCESS_TOKEN),
     });
     log('security', {
       proxy_api_key: isProxyAuthEnabled() ? 'enabled' : 'not set',

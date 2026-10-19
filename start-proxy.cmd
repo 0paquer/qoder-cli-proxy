@@ -29,16 +29,12 @@ exit /b 0
 if exist ".env" goto :env_ok
 echo [WARN] .env file not found.
 echo Run: Copy-Item .env.example .env
-echo Then edit .env and set QODERCN_PERSONAL_ACCESS_TOKEN.
 echo.
 :env_ok
 
-if defined QODERCN_PERSONAL_ACCESS_TOKEN goto :token_ok
-echo [WARN] QODERCN_PERSONAL_ACCESS_TOKEN is not set in environment.
-echo The proxy will start, but model requests will fail without a valid token.
-echo Create one at: https://qoder.com.cn/account/integrations
+echo Qoder accounts (with encrypted PATs) are managed in the admin console:
+echo   http://127.0.0.1:3000/ui/accounts
 echo.
-:token_ok
 
 echo Proxy will listen on:
 echo   http://127.0.0.1:3000

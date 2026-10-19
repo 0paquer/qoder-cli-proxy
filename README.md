@@ -63,21 +63,21 @@ npm install
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`：
+编辑 `.env`（可选，用于端口与网关鉴权等基础配置）：
 
 ```env
 # 选择后端: "cn" 或 "global"
 CLI_BACKEND=cn
 
-# CN 后端：填入你的 Personal Access Token
-QODERCN_PERSONAL_ACCESS_TOKEN=your-cn-token
-
-# Global 后端：运行 qodercli login 后无需配置令牌
+# 网关调用密钥（推荐设置，保护你的 Qoder 额度）
+PROXY_API_KEY=
 ```
 
-CN 版 PAT 创建入口：https://qoder.com.cn/account/integrations
+> **Qoder 账号的 PAT 无需写入 `.env`。** 启动后在管理台「账号管理」页添加账号并填入 PAT，
+> 每个账号的 PAT 会以 AES-256-GCM 加密存入 SQLite，多账号加权调度、互不干扰。
+> CN 版 PAT 创建入口：https://qoder.com.cn/account/integrations
 
-创建后请妥善保存。不要将 `.env` 提交到 Git，也不要把 Token 填入第三方客户端或分享给他人。
+请妥善保存 Token。不要将 `.env` 提交到 Git，也不要把 Token 填入第三方客户端或分享给他人。
 
 **第 3 步：启动**
 
@@ -190,7 +190,7 @@ opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
 | CLI 命令 | `qoderclicn` | `qodercli` |
 | 认证方式 | Personal Access Token | `qodercli login`（OAuth） |
 | 认证目录 | `~/.qoderworkcn` | `~/.qoder` |
-| 环境变量 | `QODERCN_PERSONAL_ACCESS_TOKEN` | 不需要（登录后自动认证） |
+| PAT 配置 | 账号管理页添加（AES-256-GCM 加密入库） | 无需（登录后自动认证） |
 
 ### 推理参数
 
@@ -264,9 +264,9 @@ x-api-key: <PROXY_API_KEY>
 
 ### 上游认证方式
 
-| 后端 | 认证方式 | 环境变量 |
+| 后端 | 认证方式 | PAT 配置位置 |
 |------|--------|--------|
-| CN (`qoderclicn`) | Personal Access Token | `QODERCN_PERSONAL_ACCESS_TOKEN` |
+| CN (`qoderclicn`) | Personal Access Token | 账号管理页添加（AES-256-GCM 加密入库，每账号独立） |
 | Global (`qodercli`) | OAuth 登录（`qodercli login`） | 无需配置 |
 
 ### 服务端工具执行（默认关闭）

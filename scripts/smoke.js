@@ -7,8 +7,9 @@
  *   node scripts/smoke-test.js          # quick check: /health + /v1/models
  *   node scripts/smoke-test.js --full   # also test chat and messages endpoints
  *
- * The --full flag requires a running proxy with a valid QODERCN_PERSONAL_ACCESS_TOKEN
- * and will make real model calls that consume time and quota.
+ * The --full flag requires a running proxy with at least one enabled Qoder
+ * account (added in the admin console) and will make real model calls that
+ * consume time and quota.
  *
  * PROXY_API_KEY is read from .env (or the environment) and sent automatically, so
  * this keeps working once the proxy requires a key.

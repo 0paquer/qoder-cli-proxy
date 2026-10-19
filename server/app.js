@@ -1706,17 +1706,6 @@ function createApp() {
     sendIndex(res);
   });
 
-  // --- Admin: Update PAT ---
-  app.post('/admin/update-pat', adminGuard, (req, res) => {
-    const newPat = String(req.body?.pat || '').trim();
-    if (!newPat) {
-      return openAiError(res, new AppError(400, 'invalid_request', 'PAT cannot be empty'));
-    }
-
-    db.setConfig('QODERCN_PERSONAL_ACCESS_TOKEN', newPat);
-    res.json({ ok: true, message: 'PAT updated successfully. Restart required to take effect.' });
-  });
-
   // --- Admin: Set Proxy API Key (no apiKeyGuard, bootstrap operation) ---
   app.post('/admin/set-proxy-api-key', adminGuard, (req, res) => {
     const newKey = String(req.body?.key || '').trim();

@@ -590,10 +590,6 @@ export async function setProxyApiKey(key: string): Promise<{ ok: boolean }> {
   return check(await request('/admin/set-proxy-api-key', { method: 'POST', data: { key } }));
 }
 
-export async function updateLegacyPat(pat: string): Promise<{ ok: boolean }> {
-  return check(await request('/admin/update-pat', { method: 'POST', data: { pat } }));
-}
-
 export async function restartServer(body: {
   port?: string;
   bindHost?: string;

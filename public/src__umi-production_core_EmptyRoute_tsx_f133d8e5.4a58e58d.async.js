@@ -1,0 +1,1 @@
+(globalThis.utooChunk_qoder_proxy_ui||(globalThis.utooChunk_qoder_proxy_ui=[])).push(["object"==typeof document?document.currentScript:void 0,7068,t=>{"use strict";var o=t.i(61856);t.i(48551);var u=t.i(85710);t.s(["default",0,function(){let t=(0,u.useOutletContext)();return(0,o.jsx)(u.Outlet,{context:t})}])}]);
