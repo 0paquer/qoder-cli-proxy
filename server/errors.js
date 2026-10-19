@@ -1,5 +1,7 @@
 class AppError extends Error {
-  constructor(status, code, message, type = 'server_error') {
+  // type 默认 null：交由 openAiError/anthropicError 按 status 推断
+  // （4xx → invalid_request_error / api_error，5xx → server_error）。
+  constructor(status, code, message, type = null) {
     super(message);
     this.name = 'AppError';
     this.status = status;
