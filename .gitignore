@@ -1,0 +1,21 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.runtime/
+/server.js
+MAINTENANCE_LOCAL.md
+.qoder/
+
+# Runtime data: SQLite database + AES master key (.secret-key) + WAL files.
+# NEVER commit or publish — .secret-key can decrypt all stored PATs and API keys.
+data/
+
+# Editor / IDE
+.trae/
+.vscode/
+.idea/
+
+# Frontend build output (deployed copy lives in public/)
+frontend/dist/

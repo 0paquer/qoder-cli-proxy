@@ -1,0 +1,55 @@
+{
+  "name": "qoder-cli-proxy",
+  "version": "1.6.0",
+  "description": "Qoder CLI Proxy — multi-account local gateway exposing Qoder CLI (qoderclicn / qodercli) as OpenAI / Anthropic compatible HTTP APIs",
+  "main": "server/server.js",
+  "files": [
+    "server/",
+    "public/",
+    "scripts/",
+    "test/",
+    "start-proxy.cmd",
+    "start-ui.cmd",
+    "CHANGELOG.md",
+    "README.md",
+    "README.en.md",
+    "SECURITY.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node server/server.js",
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node scripts/smoke.js",
+    "smoke:full": "node scripts/smoke.js --full"
+  },
+  "keywords": [
+    "qoder",
+    "qoder-cn",
+    "qodercn",
+    "openai-compatible",
+    "anthropic-compatible",
+    "local-adapter",
+    "compatibility",
+    "protocol-research",
+    "streaming",
+    "tool-calls"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/0paquer/qoder-cli-proxy"
+  },
+  "dependencies": {
+    "@qoder-ai/qoder-agent-sdk": "1.0.53",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
