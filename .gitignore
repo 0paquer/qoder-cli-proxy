@@ -11,6 +11,7 @@ MAINTENANCE_LOCAL.md
 # Runtime data: SQLite database + AES master key (.secret-key) + WAL files.
 # NEVER commit or publish — .secret-key can decrypt all stored PATs and API keys.
 data/
+data.bak*/
 
 # Editor / IDE
 .trae/
