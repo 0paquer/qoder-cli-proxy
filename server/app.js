@@ -192,12 +192,14 @@ function mergeApiKeyOptions(requestOptions, principal) {
   };
 }
 
-function createChatCompletion({ model, content, parsedOutput, usage }) {
+function createChatCompletion({ model, content, parsedOutput, usage, thinking }) {
   const usageTokens = {
     prompt_tokens: Math.max(0, Math.trunc(Number(usage?.inputTokens) || 0)),
     completion_tokens: Math.max(0, Math.trunc(Number(usage?.outputTokens) || 0)),
   };
   usageTokens.total_tokens = usageTokens.prompt_tokens + usageTokens.completion_tokens;
+  // OpenAI 生态约定（DeepSeek 风格）：思考内容放 message.reasoning_content。
+  const reasoningContent = thinking || undefined;
   // If the CLI output was parsed as tool calls, return OpenAI tool_calls format
   if (parsedOutput && parsedOutput.type === 'tool_calls') {
     return {
@@ -211,6 +213,7 @@ function createChatCompletion({ model, content, parsedOutput, usage }) {
           message: {
             role: 'assistant',
             content: parsedOutput.prefixText || null,
+            reasoning_content: reasoningContent,
             tool_calls: parsedOutput.toolCalls.map((call) => ({
               id: generateCallId('call_'),
               type: 'function',
@@ -240,6 +243,7 @@ function createChatCompletion({ model, content, parsedOutput, usage }) {
         message: {
           role: 'assistant',
           content,
+          reasoning_content: reasoningContent,
         },
         finish_reason: 'stop',
       },
@@ -252,7 +256,7 @@ function writeSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function writeChatCompletionStream(res, { model, content, parsedOutput }) {
+function writeChatCompletionStream(res, { model, content, parsedOutput, thinking }) {
   const id = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
   const isToolCalls = parsedOutput && parsedOutput.type === 'tool_calls';
@@ -276,6 +280,22 @@ function writeChatCompletionStream(res, { model, content, parsedOutput }) {
       },
     ],
   });
+
+  if (thinking) {
+    writeSse(res, {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { reasoning_content: thinking },
+          finish_reason: null,
+        },
+      ],
+    });
+  }
 
   if (isToolCalls) {
     if (parsedOutput.prefixText) {
@@ -805,6 +825,16 @@ function createApp() {
                   choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
                 });
               },
+              // 思考增量直通 SSE（DeepSeek 风格 reasoning_content）
+              onThinking: (thinking) => {
+                writeSse(res, {
+                  id,
+                  object: 'chat.completion.chunk',
+                  created,
+                  model,
+                  choices: [{ index: 0, delta: { reasoning_content: thinking }, finish_reason: null }],
+                });
+              },
             })
           );
         } catch (streamError) {
@@ -920,6 +950,17 @@ function createApp() {
                   writeContentChunk(fullText.slice(forwardedLength, safeLength));
                   forwardedLength = safeLength;
                 }
+              },
+              // 思考增量不参与 tool-call 安全门（思考不会长成工具调用 JSON），
+              // 直接以 reasoning_content 转发。
+              onThinking: (thinking) => {
+                writeSse(res, {
+                  id,
+                  object: 'chat.completion.chunk',
+                  created,
+                  model,
+                  choices: [{ index: 0, delta: { reasoning_content: thinking }, finish_reason: null }],
+                });
               },
             })
           );
@@ -1041,6 +1082,7 @@ function createApp() {
       // Build working messages for potential tool-call loops
       let workingMessages = [...req.body.messages];
       let finalContent = '';
+      let finalThinking = '';
       let finalParsedOutput = null;
       let toolCallDepth = 0;
       const MAX_TOOL_CALL_DEPTH = 10;
@@ -1063,6 +1105,10 @@ function createApp() {
               // Per-key overrides win over the checked-in account's baseUrl.
               baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
               timeoutMs: requestOptions.timeoutMs,
+              // 非流式：思考全文在会话结束时一次性回调（多轮取最后一轮）
+              onThinking: (thinking) => {
+                finalThinking = thinking;
+              },
             })
         );
 
@@ -1141,7 +1187,7 @@ function createApp() {
       if (req.body.stream) {
         // Buffered request (tools declared) — emit the parsed result as a
         // proper SSE stream, including delta.tool_calls when applicable.
-        writeChatCompletionStream(res, { model, content: finalContent, parsedOutput: finalParsedOutput });
+        writeChatCompletionStream(res, { model, content: finalContent, parsedOutput: finalParsedOutput, thinking: finalThinking });
       } else {
         res.json(
           createChatCompletion({
@@ -1149,6 +1195,7 @@ function createApp() {
             content: finalContent,
             parsedOutput: finalParsedOutput,
             usage: tracker.snapshot(finalContent || ''),
+            thinking: finalThinking,
           }),
         );
       }
@@ -1237,11 +1284,42 @@ function createApp() {
             usage: { input_tokens: 0, output_tokens: 0 },
           },
         });
-        writeAnthropicSse(res, 'content_block_start', {
-          type: 'content_block_start',
-          index: 0,
-          content_block: { type: 'text', text: '' },
-        });
+
+        // Anthropic 流式规范：thinking 块必须在 text 块之前，text 的 index
+        // 取决于是否出现过 thinking —— 因此块全部惰性开启、index 动态分配。
+        let nextBlockIndex = 0;
+        let thinkingOpen = false;
+        let thinkingIndex = -1;
+        let textOpen = false;
+        let textIndex = -1;
+        const openThinkingBlock = () => {
+          if (thinkingOpen) return;
+          thinkingOpen = true;
+          thinkingIndex = nextBlockIndex++;
+          writeAnthropicSse(res, 'content_block_start', {
+            type: 'content_block_start',
+            index: thinkingIndex,
+            content_block: { type: 'thinking', thinking: '' },
+          });
+        };
+        const openTextBlock = () => {
+          if (textOpen) return;
+          // 思考先于正文：首个正文增量到达时关闭 thinking 块。
+          if (thinkingOpen) {
+            thinkingOpen = false;
+            writeAnthropicSse(res, 'content_block_stop', {
+              type: 'content_block_stop',
+              index: thinkingIndex,
+            });
+          }
+          textOpen = true;
+          textIndex = nextBlockIndex++;
+          writeAnthropicSse(res, 'content_block_start', {
+            type: 'content_block_start',
+            index: textIndex,
+            content_block: { type: 'text', text: '' },
+          });
+        };
 
         let streamedText = '';
         try {
@@ -1260,10 +1338,19 @@ function createApp() {
               timeoutMs: requestOptions.timeoutMs,
               onDelta: (delta) => {
                 streamedText += delta;
+                openTextBlock();
                 writeAnthropicSse(res, 'content_block_delta', {
                   type: 'content_block_delta',
-                  index: 0,
+                  index: textIndex,
                   delta: { type: 'text_delta', text: delta },
+                });
+              },
+              onThinking: (thinking) => {
+                openThinkingBlock();
+                writeAnthropicSse(res, 'content_block_delta', {
+                  type: 'content_block_delta',
+                  index: thinkingIndex,
+                  delta: { type: 'thinking_delta', thinking },
                 });
               },
             })
@@ -1297,10 +1384,23 @@ function createApp() {
           return;
         }
 
-        writeAnthropicSse(res, 'content_block_stop', {
-          type: 'content_block_stop',
-          index: 0,
-        });
+        // 收尾：仍开启的块补 stop；全程无任何内容时发一个空 text 块，
+        // 保持「流里始终有 content block」的既有行为。
+        if (!nextBlockIndex) {
+          openTextBlock();
+        }
+        if (thinkingOpen) {
+          writeAnthropicSse(res, 'content_block_stop', {
+            type: 'content_block_stop',
+            index: thinkingIndex,
+          });
+        }
+        if (textOpen) {
+          writeAnthropicSse(res, 'content_block_stop', {
+            type: 'content_block_stop',
+            index: textIndex,
+          });
+        }
         writeAnthropicSse(res, 'message_delta', {
           type: 'message_delta',
           delta: { stop_reason: 'end_turn', stop_sequence: null },
@@ -1355,20 +1455,48 @@ function createApp() {
         let fullText = '';
         let forwardedLength = 0;
         let textBlockStarted = false;
+        // thinking 块在 text 之前（Anthropic 规范），text index 动态顺延。
+        let nextBlockIndex = 0;
+        let thinkingOpen = false;
+        let thinkingIndex = -1;
         const writeTextDelta = (text) => {
           if (!text) return;
           if (!textBlockStarted) {
             textBlockStarted = true;
+            if (thinkingOpen) {
+              thinkingOpen = false;
+              writeAnthropicSse(res, 'content_block_stop', {
+                type: 'content_block_stop',
+                index: thinkingIndex,
+              });
+            }
             writeAnthropicSse(res, 'content_block_start', {
               type: 'content_block_start',
-              index: 0,
+              index: nextBlockIndex++,
               content_block: { type: 'text', text: '' },
             });
           }
           writeAnthropicSse(res, 'content_block_delta', {
             type: 'content_block_delta',
-            index: 0,
+            index: nextBlockIndex - 1,
             delta: { type: 'text_delta', text },
+          });
+        };
+        const writeThinkingDelta = (thinking) => {
+          if (!thinking) return;
+          if (!thinkingOpen) {
+            thinkingOpen = true;
+            thinkingIndex = nextBlockIndex++;
+            writeAnthropicSse(res, 'content_block_start', {
+              type: 'content_block_start',
+              index: thinkingIndex,
+              content_block: { type: 'thinking', thinking: '' },
+            });
+          }
+          writeAnthropicSse(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: thinkingIndex,
+            delta: { type: 'thinking_delta', thinking },
           });
         };
 
@@ -1394,6 +1522,7 @@ function createApp() {
                   forwardedLength = safeLength;
                 }
               },
+              onThinking: writeThinkingDelta,
             })
           );
         } catch (streamError) {
@@ -1450,13 +1579,18 @@ function createApp() {
           log('warning: streamed prefix diverged from final text', { model });
         }
 
-        let blockIndex = 0;
+        let blockIndex = nextBlockIndex;
         if (textBlockStarted) {
           writeAnthropicSse(res, 'content_block_stop', {
             type: 'content_block_stop',
-            index: 0,
+            index: nextBlockIndex - 1,
           });
-          blockIndex = 1;
+        }
+        if (thinkingOpen) {
+          writeAnthropicSse(res, 'content_block_stop', {
+            type: 'content_block_stop',
+            index: thinkingIndex,
+          });
         }
 
         if (isToolCalls) {
@@ -1517,6 +1651,7 @@ function createApp() {
       // Build working messages for potential tool-call loops
       let workingMessagesAnthropic = [...messages];
       let anthropicContent = '';
+      let anthropicThinking = '';
       let anthropicParsedOutput = null;
       let anthropicToolDepth = 0;
       const MAX_ANTHROPIC_TOOL_DEPTH = 10;
@@ -1539,6 +1674,10 @@ function createApp() {
               // Per-key overrides win over the checked-in account's baseUrl.
               baseUrl: requestOptions.baseUrlOverride || cliOpts.baseUrl,
               timeoutMs: requestOptions.timeoutMs,
+              // 非流式：思考全文在会话结束时一次性回调（多轮取最后一轮）
+              onThinking: (thinking) => {
+                anthropicThinking = thinking;
+              },
             })
         );
 
@@ -1617,7 +1756,7 @@ function createApp() {
       if (req.body.stream) {
         // Buffered request (tools declared) — emit the parsed result as a
         // proper SSE stream, including tool_use blocks when applicable.
-        writeAnthropicMessageStream(res, { model, content: anthropicContent, parsedOutput: anthropicParsedOutput });
+        writeAnthropicMessageStream(res, { model, content: anthropicContent, parsedOutput: anthropicParsedOutput, thinking: anthropicThinking });
       } else {
         res.json(
           createAnthropicMessage({
@@ -1625,6 +1764,7 @@ function createApp() {
             content: anthropicContent,
             parsedOutput: anthropicParsedOutput,
             usage: tracker.snapshot(anthropicContent || ''),
+            thinking: anthropicThinking,
           }),
         );
       }

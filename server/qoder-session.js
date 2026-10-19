@@ -41,6 +41,21 @@ function betaText(message) {
 }
 
 /**
+ * 提取 assistant 消息里的思考内容（thinking 块）。CLI 的 stream-json 协议
+ * 会把 reasoning 模型（reasoning_effort 开启）的思考过程以 content 数组中的
+ * thinking 块（流式为 thinking_delta 事件）下发；SDK 对块类型是开放透传，
+ * 这里按需收集，不收集则为空串。
+ */
+function betaThinking(message) {
+  const content = message && message.content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => (block && block.type === 'thinking' && typeof block.thinking === 'string' ? block.thinking : ''))
+    .filter(Boolean)
+    .join('');
+}
+
+/**
  * baseUrl 指向 VPC 专属域时提取域名供 SDK/CLI 端点覆盖。
  * https://chery-nextai.vpc.qoder.com.cn → chery-nextai.vpc.qoder.com.cn
  */
@@ -275,6 +290,7 @@ async function runSdkSession({ prompt, options, controller, timeoutMs, signal, b
 
   let resultMessage = null;
   let assistantText = '';
+  let assistantThinking = '';
   let outputBytes = 0;
 
   const appendOutput = (text) => {
@@ -299,6 +315,8 @@ async function runSdkSession({ prompt, options, controller, timeoutMs, signal, b
           appendOutput(text);
           assistantText = text; // 同一轮 assistant 事件为累计快照，取最后一条
         }
+        const thinking = betaThinking(message.message);
+        if (thinking) assistantThinking = thinking; // 累计快照，同样取最后一条
       } else if (message.type === 'result') {
         resultMessage = message; // result 为终止消息，流随后关闭
       }
@@ -322,7 +340,7 @@ async function runSdkSession({ prompt, options, controller, timeoutMs, signal, b
     throw new AppError(504, 'upstream_timeout', `${backend.command} request timed out.`);
   }
 
-  return { resultMessage, assistantText };
+  return { resultMessage, assistantText, thinkingText: assistantThinking };
 }
 
 function finalizeResult({ resultMessage, assistantText, backend }) {
@@ -377,6 +395,7 @@ async function runQoderCnCli({
   baseUrl,
   backendType,
   onUsage,
+  onThinking,
 }) {
   const backend = cli.getCliBackend(backendType);
   const effectiveToken = requireToken(backend, token);
@@ -400,7 +419,7 @@ async function runQoderCnCli({
     stderrRef,
   });
 
-  const { resultMessage, assistantText } = await runSdkSession({
+  const { resultMessage, assistantText, thinkingText } = await runSdkSession({
     prompt,
     options,
     controller,
@@ -410,6 +429,14 @@ async function runQoderCnCli({
     stderrRef,
   });
   const { text, usage } = finalizeResult({ resultMessage, assistantText, backend });
+  // 非流式没有增量概念：思考全文在会话结束时一次性回调（若调用方关心）。
+  if (thinkingText && typeof onThinking === 'function') {
+    try {
+      onThinking(thinkingText);
+    } catch (_) {
+      // Thinking reporting must never break the response path.
+    }
+  }
   reportUsage(onUsage, usage);
   return text;
 }
@@ -429,6 +456,7 @@ async function runQoderCnCliStream({
   signal,
   rootDir = process.cwd(),
   onDelta,
+  onThinking,
   token,
   baseUrl,
   backendType,
@@ -473,14 +501,26 @@ async function runQoderCnCliStream({
 
   let resultMessage = null;
   let assistantText = '';
+  let assistantThinking = '';
   let emitted = '';
+  let thinkingEmitted = false;
   let outputBytes = 0;
 
-  const emitDelta = (chunk) => {
+  const emitDelta = (chunk, kind = 'text') => {
     if (!chunk) return;
     outputBytes += Buffer.byteLength(chunk);
     if (outputBytes > MAX_OUTPUT_BYTES) {
       throw new AppError(502, 'upstream_output_too_large', 'Qoder CN CLI output exceeded the limit.');
+    }
+    if (kind === 'thinking') {
+      thinkingEmitted = true;
+      if (typeof onThinking !== 'function') return;
+      try {
+        onThinking(chunk);
+      } catch (_) {
+        // Client connection may already be gone — keep draining the stream.
+      }
+      return;
     }
     emitted += chunk;
     try {
@@ -496,14 +536,18 @@ async function runQoderCnCliStream({
       if (!message || typeof message !== 'object') continue;
       if (message.type === 'stream_event') {
         const event = message.event;
+        if (!event || event.type !== 'content_block_delta' || !event.delta) continue;
         if (
-          event &&
-          event.type === 'content_block_delta' &&
-          event.delta &&
           event.delta.type === 'text_delta' &&
           typeof event.delta.text === 'string'
         ) {
           emitDelta(event.delta.text);
+        } else if (
+          event.delta.type === 'thinking_delta' &&
+          typeof event.delta.thinking === 'string'
+        ) {
+          // reasoning 模型的思考增量；调用方未订阅时仅计数不回调。
+          emitDelta(event.delta.thinking, 'thinking');
         }
       } else if (message.type === 'assistant') {
         const text = betaText(message.message);
@@ -512,6 +556,8 @@ async function runQoderCnCliStream({
           // 不再累加 outputBytes（否则双计、多轮重复累计会提前触发 10MB 上限）
           assistantText = text;
         }
+        const thinking = betaThinking(message.message);
+        if (thinking) assistantThinking = thinking;
       } else if (message.type === 'result') {
         resultMessage = message;
       }
@@ -543,6 +589,16 @@ async function runQoderCnCliStream({
   if (!emitted && text) {
     try {
       onDelta(text);
+    } catch (_) {
+      // Ignore — resolve regardless.
+    }
+  }
+
+  // Thinking fallback：增量一个没来但最终快照里有思考内容（CLI 聚合行为
+  // 差异兜底），一次性补发全文，保证订阅方拿到完整思考。
+  if (!thinkingEmitted && assistantThinking && typeof onThinking === 'function') {
+    try {
+      onThinking(assistantThinking);
     } catch (_) {
       // Ignore — resolve regardless.
     }

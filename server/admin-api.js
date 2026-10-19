@@ -395,6 +395,7 @@ function createAdminApi() {
 
     const started = Date.now();
     let usage = null;
+    let thinking = '';
     try {
       const content = await qoderCli.runQoderCnCli({
         messages,
@@ -405,9 +406,12 @@ function createAdminApi() {
         onUsage: (u) => {
           usage = u;
         },
+        onThinking: (t) => {
+          thinking = t;
+        },
       });
       balancer.reportSuccess(account.id);
-      res.json({ ok: true, content, usage, durationMs: Date.now() - started });
+      res.json({ ok: true, content, thinking: thinking || undefined, usage, durationMs: Date.now() - started });
     } catch (error) {
       balancer.reportFailure(account.id, error);
       res.json({
@@ -463,6 +467,7 @@ function createAdminApi() {
 
     const started = Date.now();
     let usage = null;
+    let thinking = '';
     try {
       const content = await qoderCli.runQoderCnCliStream({
         messages,
@@ -472,12 +477,16 @@ function createAdminApi() {
         backendType: account.backendType || 'cn',
         signal: controller.signal,
         onDelta: (delta) => send({ type: 'delta', delta }),
+        onThinking: (t) => {
+          thinking += t;
+          send({ type: 'thinking', delta: t });
+        },
         onUsage: (u) => {
           usage = u;
         },
       });
       balancer.reportSuccess(account.id);
-      send({ type: 'done', ok: true, content, usage, durationMs: Date.now() - started });
+      send({ type: 'done', ok: true, content, thinking: thinking || undefined, usage, durationMs: Date.now() - started });
     } catch (error) {
       balancer.reportFailure(account.id, error);
       send({

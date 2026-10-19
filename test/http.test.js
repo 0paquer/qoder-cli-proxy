@@ -444,3 +444,143 @@ test('OpenAI chat completions with tool role messages formats tool results in pr
     server.close();
   }
 });
+
+test('thinking: OpenAI stream forwards reasoning_content deltas separately', async () => {
+  const originalStream = qoderCli.runQoderCnCliStream;
+  qoderCli.runQoderCnCliStream = async ({ onDelta, onThinking }) => {
+    if (onThinking) {
+      onThinking('让我想想');
+      onThinking('，答案是');
+    }
+    onDelta('42');
+    return '42';
+  };
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const streaming = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(streaming.status, 200);
+    const text = await streaming.text();
+    const reasoningMatches = text.match(/"reasoning_content":"[^"]+"/g) || [];
+    assert.equal(reasoningMatches.length, 2);
+    assert.match(reasoningMatches[0], /"reasoning_content":"让我想想"/);
+    assert.match(reasoningMatches[1], /"reasoning_content":"，答案是"/);
+    // 正文与思考分离：content 只承载正文增量
+    assert.match(text, /"content":"42"/);
+  } finally {
+    qoderCli.runQoderCnCliStream = originalStream;
+    server.close();
+  }
+});
+
+test('thinking: OpenAI non-streaming returns message.reasoning_content', async () => {
+  const originalRun = qoderCli.runQoderCnCli;
+  qoderCli.runQoderCnCli = async ({ onThinking }) => {
+    if (onThinking) onThinking('思考过程全文');
+    return '最终答案';
+  };
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.choices[0].message.content, '最终答案');
+    assert.equal(body.choices[0].message.reasoning_content, '思考过程全文');
+  } finally {
+    qoderCli.runQoderCnCli = originalRun;
+    server.close();
+  }
+});
+
+test('thinking: Anthropic stream emits thinking block before text block', async () => {
+  const originalStream = qoderCli.runQoderCnCliStream;
+  qoderCli.runQoderCnCliStream = async ({ onDelta, onThinking }) => {
+    if (onThinking) onThinking('先推理');
+    onDelta('后作答');
+    return '后作答';
+  };
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const streaming = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stream: true,
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    assert.equal(streaming.status, 200);
+    const text = await streaming.text();
+    // thinking 块先 start（index 0），text 块后 start（index 1）
+    const thinkingStart = text.indexOf('"content_block":{"type":"thinking"');
+    const textStart = text.indexOf('"content_block":{"type":"text"');
+    assert.ok(thinkingStart >= 0, 'thinking content_block_start expected');
+    assert.ok(textStart > thinkingStart, 'text block must start after thinking block');
+    assert.match(text, /"type":"thinking_delta","thinking":"先推理"/);
+    assert.match(text, /"type":"text_delta","text":"后作答"/);
+    assert.match(text, /event: content_block_stop/);
+  } finally {
+    qoderCli.runQoderCnCliStream = originalStream;
+    server.close();
+  }
+});
+
+test('thinking: Anthropic non-streaming prepends thinking block to content', async () => {
+  const originalRun = qoderCli.runQoderCnCli;
+  qoderCli.runQoderCnCli = async ({ onThinking }) => {
+    if (onThinking) onThinking('推理全文');
+    return '结论';
+  };
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.content[0].type, 'thinking');
+    assert.equal(body.content[0].thinking, '推理全文');
+    assert.equal(body.content[1].type, 'text');
+    assert.equal(body.content[1].text, '结论');
+  } finally {
+    qoderCli.runQoderCnCli = originalRun;
+    server.close();
+  }
+});
+
+test('thinking: no onThinking subscriber keeps responses thinking-free', async () => {
+  const originalStream = qoderCli.runQoderCnCliStream;
+  // CLI 产出思考增量但网关未订阅（不会发生——网关总是订阅；此用例锁死
+  // 「未订阅时流式响应不出现 reasoning_content」的兼容行为）
+  qoderCli.runQoderCnCliStream = async ({ onDelta }) => {
+    onDelta('plain');
+    return 'plain';
+  };
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const streaming = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    const text = await streaming.text();
+    assert.equal((text.match(/reasoning_content/g) || []).length, 0);
+    assert.match(text, /"content":"plain"/);
+  } finally {
+    qoderCli.runQoderCnCliStream = originalStream;
+    server.close();
+  }
+});

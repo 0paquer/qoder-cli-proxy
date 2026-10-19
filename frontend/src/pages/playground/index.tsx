@@ -1,5 +1,5 @@
 import { ClearOutlined, SendOutlined } from '@ant-design/icons';
-import { Button, Segmented, Select, Spin, Tag, Tooltip, message } from 'antd';
+import { Button, Collapse, Segmented, Select, Spin, Tag, Tooltip, message } from 'antd';
 import React, { useEffect, useRef, useState } from 'react';
 import { PageHeader, SectionCard } from '@/components/QpCard';
 import {
@@ -13,6 +13,8 @@ import {
 
 interface ChatMsg extends ChatTurn {
   id: number;
+  /** reasoning 模型的思考过程（reasoning_effort 开启时 CLI 返回）。 */
+  thinking?: string;
   /** 仅 assistant 消息携带：耗时 / token 用量 / 错误信息。 */
   meta?: {
     durationMs?: number;
@@ -21,6 +23,41 @@ interface ChatMsg extends ChatTurn {
     code?: string;
   };
 }
+
+/** 思考过程折叠区：默认收起，流式生成中展开并跟随。 */
+const ThinkingBlock: React.FC<{ thinking?: string; streaming: boolean; hasContent: boolean }> = ({
+  thinking,
+  streaming,
+  hasContent,
+}) => {
+  if (!thinking) return null;
+  return (
+    <Collapse
+      ghost
+      size="small"
+      className="mb-1 -ml-2"
+      defaultActiveKey={streaming && !hasContent ? ['think'] : undefined}
+      items={[
+        {
+          key: 'think',
+          label: (
+            <span className="text-[12px] text-gray-400">
+              {streaming && !hasContent ? '思考中…' : '思考过程'}
+            </span>
+          ),
+          children: (
+            <div className="max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words border-l-2 border-indigo-100 pl-2.5 text-[13px] leading-relaxed text-gray-400">
+              {thinking}
+              {streaming && !hasContent && (
+                <span className="ml-0.5 inline-block h-[12px] w-[2px] animate-pulse bg-indigo-300 align-middle" />
+              )}
+            </div>
+          ),
+        },
+      ]}
+    />
+  );
+};
 
 let msgSeq = 0;
 const nextMsgId = () => (msgSeq += 1);
@@ -135,6 +172,7 @@ const PlaygroundPage: React.FC = () => {
               id: nextMsgId(),
               role: 'assistant',
               content: res.content ?? '',
+              thinking: res.thinking,
               meta: { durationMs: res.durationMs, usage: res.usage ?? undefined },
             },
           ]);
@@ -180,12 +218,17 @@ const PlaygroundPage: React.FC = () => {
         (delta) => {
           patch((t) => ({ ...t, content: t.content + delta }));
         },
+        // 思考增量：实时追加；done 兜底覆盖（CLI 聚合行为差异时补全文）
+        (delta) => {
+          patch((t) => ({ ...t, thinking: (t.thinking ?? '') + delta }));
+        },
         controller.signal,
       );
       if (done.ok) {
         patch((t) => ({
           ...t,
           content: done.content ?? t.content,
+          thinking: done.thinking ?? t.thinking,
           meta: { durationMs: done.durationMs, usage: done.usage ?? undefined },
         }));
       } else {
@@ -329,6 +372,11 @@ const PlaygroundPage: React.FC = () => {
                     Q
                   </div>
                   <div className="max-w-[75%]">
+                    <ThinkingBlock
+                      thinking={t.thinking}
+                      streaming={t.id === streamingId}
+                      hasContent={Boolean(t.content)}
+                    />
                     {t.content && (
                       <div className="whitespace-pre-wrap break-words rounded-[10px] border border-gray-100 bg-white px-3.5 py-2.5 text-[14px] text-gray-800">
                         {t.content}

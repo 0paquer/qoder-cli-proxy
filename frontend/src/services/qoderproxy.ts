@@ -301,6 +301,7 @@ export async function testChat(body: {
 }): Promise<{
   ok: boolean;
   content?: string;
+  thinking?: string;
   usage?: { inputTokens: number; outputTokens: number } | null;
   durationMs?: number;
   error?: string;
@@ -312,16 +313,18 @@ export async function testChat(body: {
 export interface StreamTestChatDone {
   ok: boolean;
   content?: string;
+  thinking?: string;
   usage?: { inputTokens: number; outputTokens: number } | null;
   durationMs?: number;
   error?: string;
   code?: string;
 }
 
-/** 流式版 testChat：SSE 增量回调 onDelta，resolve 值为 done 汇总事件。signal 用于客户端中止。 */
+/** 流式版 testChat：SSE 增量回调 onDelta/onThinking，resolve 值为 done 汇总事件。signal 用于客户端中止。 */
 export async function streamTestChat(
   body: { accountId: number; model: string; messages: ChatTurn[] },
   onDelta: (delta: string) => void,
+  onThinking?: (delta: string) => void,
   signal?: AbortSignal,
 ): Promise<StreamTestChatDone> {
   // 裸 fetch 不走 umi 拦截器，必须手动带会话 token（adminGuard 要求 Bearer）
@@ -362,6 +365,8 @@ export async function streamTestChat(
       const event = JSON.parse(payload);
       if (event.type === 'delta' && typeof event.delta === 'string') {
         onDelta(event.delta);
+      } else if (event.type === 'thinking' && typeof event.delta === 'string') {
+        onThinking?.(event.delta);
       } else if (event.type === 'done') {
         done = event;
       }

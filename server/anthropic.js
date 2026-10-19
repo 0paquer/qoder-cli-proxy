@@ -86,14 +86,17 @@ function anthropicToOpenAiMessages(body) {
   return { messages, tools };
 }
 
-function createAnthropicMessage({ model, content, parsedOutput, usage }) {
+function createAnthropicMessage({ model, content, parsedOutput, usage, thinking }) {
   const usageTokens = {
     input_tokens: Math.max(0, Math.trunc(Number(usage?.inputTokens) || 0)),
     output_tokens: Math.max(0, Math.trunc(Number(usage?.outputTokens) || 0)),
   };
+  // Anthropic 规范：thinking 块位于 content 数组最前（在 text/tool_use 之前）。
+  const thinkingBlock = thinking ? [{ type: 'thinking', thinking }] : [];
+
   // If the CLI output was parsed as tool calls, return Anthropic tool_use format
   if (parsedOutput && parsedOutput.type === 'tool_calls') {
-    const contentBlocks = [];
+    const contentBlocks = [...thinkingBlock];
 
     // Add prefix text if the model also output explanatory text
     if (parsedOutput.prefixText) {
@@ -129,7 +132,7 @@ function createAnthropicMessage({ model, content, parsedOutput, usage }) {
     type: 'message',
     role: 'assistant',
     model,
-    content: [{ type: 'text', text: content }],
+    content: [...thinkingBlock, { type: 'text', text: content }],
     stop_reason: 'end_turn',
     stop_sequence: null,
     usage: usageTokens,
@@ -141,7 +144,7 @@ function writeAnthropicSse(res, event, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function writeAnthropicMessageStream(res, { model, content, parsedOutput }) {
+function writeAnthropicMessageStream(res, { model, content, parsedOutput, thinking }) {
   const id = `msg_${Date.now()}`;
   const isToolCalls = parsedOutput && parsedOutput.type === 'tool_calls';
 
@@ -165,8 +168,27 @@ function writeAnthropicMessageStream(res, { model, content, parsedOutput }) {
     },
   });
 
+  // Anthropic 流式规范：thinking 块最先出现（index 0），后续块顺延。
+  if (thinking) {
+    writeAnthropicSse(res, 'content_block_start', {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'thinking', thinking: '' },
+    });
+    writeAnthropicSse(res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'thinking_delta', thinking },
+    });
+    writeAnthropicSse(res, 'content_block_stop', {
+      type: 'content_block_stop',
+      index: 0,
+    });
+  }
+  const thinkingOffset = thinking ? 1 : 0;
+
   if (isToolCalls) {
-    let blockIndex = 0;
+    let blockIndex = thinkingOffset;
 
     if (parsedOutput.prefixText) {
       writeAnthropicSse(res, 'content_block_start', {
@@ -224,19 +246,19 @@ function writeAnthropicMessageStream(res, { model, content, parsedOutput }) {
 
   writeAnthropicSse(res, 'content_block_start', {
     type: 'content_block_start',
-    index: 0,
+    index: thinkingOffset,
     content_block: { type: 'text', text: '' },
   });
   if (content) {
     writeAnthropicSse(res, 'content_block_delta', {
       type: 'content_block_delta',
-      index: 0,
+      index: thinkingOffset,
       delta: { type: 'text_delta', text: content },
     });
   }
   writeAnthropicSse(res, 'content_block_stop', {
     type: 'content_block_stop',
-    index: 0,
+    index: thinkingOffset,
   });
   writeAnthropicSse(res, 'message_delta', {
     type: 'message_delta',
