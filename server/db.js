@@ -284,6 +284,9 @@ function migrateEnvToConfig() {
   const envContent = fs.readFileSync(envPath, 'utf-8');
   const lines = envContent.split('\n');
 
+  // .env 是文件侧真源：值与 config 表不一致时以 .env 为准（用户手改 .env
+  // 重启后生效）。管理台「系统设置」保存时 config 与 .env 同步写入，两边
+  // 恒等，不会被误覆盖。空值视为「未设置」，不覆盖已有配置。
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
@@ -293,14 +296,12 @@ function migrateEnvToConfig() {
 
     const key = trimmed.slice(0, eq).trim();
     const value = trimmed.slice(eq + 1).trim();
-
-    // Only migrate if not already in database
-    if (!getConfig(key)) {
-      setConfig(key, value);
-    }
+    if (!key || value === '') continue;
+    if (getConfig(key) === value) continue;
+    setConfig(key, value);
   }
 
-  console.log('[db] Migrated .env config to database');
+  console.log('[db] Synced .env config to database');
 }
 
 function initialize() {

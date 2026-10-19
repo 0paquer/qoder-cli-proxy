@@ -1,9 +1,19 @@
-// Load .env file from project root
+// logger 必须最先加载：包装 console.* 才能捕获 db 初始化等启动日志
+require('./logger');
+
+// ── .env bootstrap ───────────────────────────────────────────────────────────
+// 1) .env 不存在：以 .env.example 为模板创建，并自动生成随机 PROXY_API_KEY。
+//    固定默认密钥是安全反模式（所有部署密钥相同等于裸奔），因此每部署随机；
+//    之后可在 .env 或管理台「系统设置」中修改，下次启动生效。
+// 2) 加载 .env 到 process.env（不覆盖外部已显式注入的变量，如服务/容器环境）。
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const envPath = path.join(__dirname, '..', '.env');
-try {
-  if (fs.existsSync(envPath)) {
+
+function loadEnvFile() {
+  if (!fs.existsSync(envPath)) return;
+  try {
     const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
     for (const line of lines) {
       const trimmed = line.trim();
@@ -16,13 +26,37 @@ try {
         process.env[key] = val;
       }
     }
+  } catch (_) {
+    // Ignore .env load errors
   }
-} catch (_) {
-  // Ignore .env load errors
 }
 
-// logger 必须最先加载：包装 console.* 才能捕获 db 初始化等启动日志
-require('./logger');
+function ensureDefaultEnv() {
+  if (fs.existsSync(envPath)) return null;
+  const examplePath = path.join(__dirname, '..', '.env.example');
+  let content = fs.existsSync(examplePath)
+    ? fs.readFileSync(examplePath, 'utf-8')
+    : '# Qoder CLI Proxy configuration\n';
+  const key = 'qp-' + crypto.randomBytes(24).toString('hex');
+  if (/^PROXY_API_KEY=.*$/m.test(content)) {
+    content = content.replace(/^PROXY_API_KEY=.*$/m, `PROXY_API_KEY=${key}`);
+  } else {
+    content = content.replace(/\s*$/, '\n')
+      + '# Gateway key (auto-generated; edit here or in the admin console System Settings)\n'
+      + `PROXY_API_KEY=${key}\n`;
+  }
+  fs.writeFileSync(envPath, content, 'utf-8');
+  return key;
+}
+
+const generatedGatewayKey = ensureDefaultEnv();
+loadEnvFile();
+if (generatedGatewayKey) {
+  console.log(
+    '[env] .env not found — created from template with a randomly generated PROXY_API_KEY. ' +
+      'Edit .env (or admin console → System Settings) to change it; takes effect on next start.'
+  );
+}
 
 // Windows 下隐藏子进程控制台窗口：@qoder-ai/qoder-agent-sdk 内部的 spawn/execFile
 // （startDaemon 拉起 CLI 加载模型目录、IDE 探测等）未传 windowsHide，当本服务进程

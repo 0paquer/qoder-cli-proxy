@@ -56,14 +56,19 @@ qodercli --version
 qodercli login   # 必须登录一次
 ```
 
-**第 2 步：配置**
+**第 2 步：配置（可选）**
 
 ```powershell
 npm install
-Copy-Item .env.example .env
 ```
 
-编辑 `.env`（可选，用于端口与网关鉴权等基础配置）：
+`.env` 不是必需的：不存在时首次启动会以 `.env.example` 为模板自动创建，并生成**随机**的 `PROXY_API_KEY` 写入（每部署唯一，可在 `.env` 或管理台「系统设置」中修改，下次启动生效）。
+
+也可以手动创建后编辑 `.env`：
+
+```powershell
+Copy-Item .env.example .env
+```
 
 ```env
 # 选择后端: "cn" 或 "global"
@@ -72,6 +77,8 @@ CLI_BACKEND=cn
 # 网关调用密钥（推荐设置，保护你的 Qoder 额度）
 PROXY_API_KEY=
 ```
+
+修改 `.env` 后重启服务即可生效。管理台「系统设置」页保存的配置会同步写回 `.env`。
 
 > **Qoder 账号的 PAT 无需写入 `.env`。** 启动后在管理台「账号管理」页添加账号并填入 PAT，
 > 每个账号的 PAT 会以 AES-256-GCM 加密存入 SQLite，多账号加权调度、互不干扰。

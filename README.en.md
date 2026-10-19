@@ -56,14 +56,19 @@ qodercli --version
 qodercli login   # must log in once
 ```
 
-**Step 2: configure**
+**Step 2: configure (optional)**
 
 ```powershell
 npm install
-Copy-Item .env.example .env
 ```
 
-Edit `.env` (optional, for port and gateway auth basics):
+`.env` is not required: on first start without one, the proxy creates it from the `.env.example` template and writes a **randomly generated** `PROXY_API_KEY` (unique per deployment; edit it in `.env` or in the admin console System Settings — changes take effect on next start).
+
+You can also create it manually and then edit `.env`:
+
+```powershell
+Copy-Item .env.example .env
+```
 
 ```env
 # Choose backend: "cn" or "global"
@@ -72,6 +77,8 @@ CLI_BACKEND=cn
 # Gateway API key (recommended, protects your Qoder quota)
 PROXY_API_KEY=
 ```
+
+Restart the service after editing `.env` to apply changes. Settings saved in the admin console (System Settings) are synced back to `.env`.
 
 > **Qoder account PATs do NOT go into `.env`.** After starting, add accounts
 > in the admin console (Accounts page). Each account's PAT is encrypted
