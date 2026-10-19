@@ -110,6 +110,32 @@ curl.exe http://127.0.0.1:3000/v1/chat/completions `
 
 A model reply means the chain works. The admin console is at `http://127.0.0.1:3000/ui` (`.\start-ui.cmd` opens it in your browser).
 
+## Tutorial: From Empty Database to First Real Conversation
+
+Quick Start gets the service running; this section walks you the rest of the way.
+
+### Step 5: log in and change the default password
+
+1. Open `http://127.0.0.1:3000/ui` and log in with `admin` / `admin123`
+2. First login **forces** a password-change dialog: at least 8 characters, different from the default — it cannot be skipped
+3. Until the password is changed, every admin API except change-password/logout/session-info returns `403 default_password`
+
+### Step 6: add a Qoder account
+
+1. Accounts → Add Account, fill in the name and PAT (CN PAT page: https://qoder.com.cn/account/integrations)
+2. After saving, click Verify — it loads the model catalog with zero token consumption
+3. Quota shows the bucketed breakdown (auto-refreshed server-side every 10 minutes)
+4. Adjust weight and concurrency as needed; the PAT is encrypted at rest and only its fingerprint is shown
+
+### Step 7: test a conversation
+
+- The Playground page chats against a chosen account directly (streaming toggle) to confirm the upstream chain
+- The API Test page takes a `qk-` API key and exercises the full gateway path (auth → scheduling → quota → SDK call)
+
+### Step 8: connect your client
+
+See the next section, Local Client Adaptation: OpenAI-compatible clients just need the Base URL and `PROXY_API_KEY`; Anthropic-style clients need two environment variables.
+
 ## Local Client Adaptation
 
 ### OpenAI-Compatible Interface
@@ -224,19 +250,143 @@ Or specify per request via `reasoning_effort`, `context_window`, and `max_tokens
 
 Reasoning effort aliases: `qwen3.8-max-effort-low`, `-medium`, `-high`, `-max`, and `qwen3.7-max-effort-low`, `-medium`, `-high`, `-max`
 
-## API Endpoints
+## API Documentation
 
-With `PROXY_API_KEY` set, `/v1/*` and `/usage/*` require the key; `/health` does not.
+### Authentication
 
-| Method | Path | Key required | Description |
-|--------|------|------|------|
-| GET | `/health` | No | Health check |
-| GET | `/v1/models` | Yes | Model list (with credit rates) |
-| POST | `/v1/chat/completions` | Yes | OpenAI-compatible chat with tools field adaptation |
-| POST | `/v1/messages` | Yes | Anthropic-compatible chat with tool_use field adaptation |
-| POST | `/v1/messages/count_tokens` | Yes | Token estimation |
-| GET | `/usage/local` | Yes | Local usage estimate |
-| POST | `/usage/reset-local` | Yes | Reset local usage statistics |
+| Scope | Auth |
+|-------|------|
+| `/v1/*`, `/usage/*` | Required once `PROXY_API_KEY` is set; the key may be `PROXY_API_KEY` itself or a `qk-` API key issued from the console |
+| `/health` | Always open |
+| `/admin/*` | Admin session: `POST /admin/login` for a token, then send `Authorization: Bearer <token>` |
+| `/ui` | Browser page, local token storage |
+
+Either request header works:
+
+```text
+Authorization: Bearer <key>
+x-api-key: <key>
+```
+
+### Endpoint Overview
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | None | Health check |
+| GET | `/v1/models` | Gateway key | Model list (with credit rates) |
+| POST | `/v1/chat/completions` | Gateway key | OpenAI-compatible chat with tools field adaptation |
+| POST | `/v1/messages` | Gateway key | Anthropic-compatible chat with tool_use field adaptation |
+| POST | `/v1/messages/count_tokens` | Gateway key | Token estimation |
+| GET | `/usage/local` | Gateway key | Local usage estimate |
+| POST | `/usage/reset-local` | Gateway key | Reset local usage statistics |
+| POST | `/admin/login` | None (rate-limited) | Console login; returns `token` and `mustChangePassword` |
+| POST | `/admin/change-password` | Admin session | Change password (the default password must be changed) |
+| POST | `/admin/logout` | Admin session | End the current session |
+
+### Request Parameters (`/v1/chat/completions`)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `messages` | array | Yes | OpenAI message structure (`role` / `content`) |
+| `model` | string | No | Defaults to `qoder-cn`; see Configuration Reference for the list |
+| `stream` | boolean | No | Default `false`; SSE incremental output |
+| `tools` | array | No | OpenAI tools structure (text-layer adaptation, see How It Works) |
+| `reasoning_effort` | string | No | `low` / `medium` / `high` / `max`; `reasoning.effort` also accepted |
+| `context_window` | number | No | Override the context window |
+| `max_tokens` | number | No | Override max output tokens |
+
+`/v1/messages` uses the standard Anthropic request structure (`model` / `max_tokens` / `system` / `messages`) with the same-named parameters mapped through.
+
+### Response Examples
+
+**Model list** `GET /v1/models`:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen3.8-max",
+      "object": "model",
+      "created": 0,
+      "owned_by": "qodercn",
+      "name": "Qwen3.8 Max",
+      "capabilities": { "reasoning": true },
+      "rate": 1.0,
+      "is_free": false
+    }
+  ]
+}
+```
+
+**Non-streaming chat** `POST /v1/chat/completions` (reasoning models carry `reasoning_content`, the DeepSeek ecosystem convention):
+
+```json
+{
+  "id": "chatcmpl-1760000000000",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "qoder-cn",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello!",
+        "reasoning_content": "The user is greeting me; keep it short."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": { "prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20 }
+}
+```
+
+**Streaming chat** `stream: true` (SSE; `data:` lines separated by a blank line, terminated by `data: [DONE]`):
+
+```text
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking…"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+Anthropic-style streaming (`POST /v1/messages`) emits `message_start` → `content_block_start` → `content_block_delta` (`text_delta` / `thinking_delta`) → `content_block_stop` → `message_delta` (`stop_reason: "end_turn"`) → `message_stop`.
+
+### Error Format & Codes
+
+OpenAI style (default for `/v1/*`):
+
+```json
+{ "error": { "message": "…", "type": "invalid_request_error", "code": "invalid_request" } }
+```
+
+Anthropic style (`/v1/messages*`):
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "…" } }
+```
+
+Common error codes:
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 400 | `invalid_request` / `invalid_messages` / `unsupported_role` | Malformed body or messages structure |
+| 401 | `invalid_api_key` | Key missing or wrong |
+| 401 | `cli_token_missing` | No configured Qoder account available |
+| 401 | `unauthorized` | Admin session not logged in or expired |
+| 403 | `default_password` | Default password not yet changed; admin APIs refused (forced first-login change) |
+| 403 | `no_account_granted` | The user has no granted accounts |
+| 403 | `host_not_allowed` / `origin_not_allowed` | Host / Origin check failed (DNS rebinding, cross-origin protection) |
+| 429 | `quota_exceeded` | User quota exceeded (daily/monthly tokens or requests) |
+| 502 | `cli_not_found` / `upstream_error` | CLI missing or upstream returned an error |
+| 503 | `no_available_account` | No usable account (all cooling down or exhausted) |
+| 504 | `upstream_timeout` | Request timed out |
 
 ## Security Boundaries
 
@@ -308,7 +458,7 @@ Treat the feature as experimental, and pair it with `PROXY_API_KEY`.
 ### Reporting a Vulnerability
 
 Please do not use public issues for vulnerabilities. Use GitHub's private reporting form:
-[Report a vulnerability](https://github.com/avaritiachaos/qoder-cli-proxy/security/advisories/new).
+[Report a vulnerability](https://github.com/0paquer/qoder-cli-proxy/security/advisories/new).
 See [SECURITY.md](SECURITY.md) for details.
 
 ## Testing

@@ -109,6 +109,32 @@ curl.exe http://127.0.0.1:3000/v1/chat/completions `
 
 看到模型回复即链路打通。管理控制台在 `http://127.0.0.1:3000/ui`（快捷启动 `.\start-ui.cmd` 自动打开浏览器）。
 
+## 使用教程：从零到第一次真实对话
+
+快速开始让服务跑起来了，本节带你走完从空库到可用的全过程。
+
+### 第 5 步：登录控制台并修改默认密码
+
+1. 打开 `http://127.0.0.1:3000/ui`，用 `admin` / `admin123` 登录
+2. 首次登录会**强制弹出**「修改初始密码」：至少 8 位，且不能与默认密码相同，无法跳过
+3. 未改密码前，除改密/登出/会话信息外的所有管理接口一律返回 `403 default_password`
+
+### 第 6 步：添加 Qoder 账号
+
+1. 进入「账号管理」→「添加账号」，填写名称与 PAT（CN 版创建入口：https://qoder.com.cn/account/integrations）
+2. 保存后点「验证」——加载模型目录，零 token 消耗
+3. 「剩余额度」查看分桶明细（服务端每 10 分钟后台自动刷新）
+4. 按需调整权重与并发上限；PAT 全程加密存储，页面只显示指纹
+
+### 第 7 步：测试对话
+
+- 「测试对话」页选择账号直接发送消息（可切流式 / 非流式），确认上游链路正常
+- 「调用测试」页粘贴 `qk-` API Key，走完整网关链路（鉴权 → 调度 → 配额 → SDK 调用）
+
+### 第 8 步：接入你的客户端
+
+见下一节「接入客户端」：OpenAI 兼容客户端填 Base URL 与 `PROXY_API_KEY` 即可；Anthropic 系客户端设置两个环境变量即可。
+
 ## 接入客户端
 
 ### OpenAI 兼容接口
@@ -225,19 +251,143 @@ $env:QODERCN_MAX_OUTPUT_TOKENS = "4096"
 
 推理强度别名：`qwen3.8-max-effort-low`、`-medium`、`-high`、`-max`，以及 `qwen3.7-max-effort-low`、`-medium`、`-high`、`-max`
 
-## API 端点
+## API 文档
 
-设置了 `PROXY_API_KEY` 的话，`/v1/*` 与 `/usage/*` 都需要携带密钥；`/health` 不需要。
+### 认证方式
 
-| 方法 | 路径 | 需要密钥 | 说明 |
+| 范围 | 认证方式 |
+|------|----------|
+| `/v1/*`、`/usage/*` | 设置 `PROXY_API_KEY` 后必须携带；密钥可以是 `PROXY_API_KEY` 本身，也可以是管理台发放的 `qk-` API Key |
+| `/health` | 始终开放 |
+| `/admin/*` | 管理会话：`POST /admin/login` 换取 token，后续请求带 `Authorization: Bearer <token>` |
+| `/ui` | 浏览器页面，本地 token 存储 |
+
+请求头两种形式任选：
+
+```text
+Authorization: Bearer <key>
+x-api-key: <key>
+```
+
+### 端点总览
+
+| 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| GET | `/health` | 否 | 健康检查 |
-| GET | `/v1/models` | 是 | 模型列表（含 credit 倍率） |
-| POST | `/v1/chat/completions` | 是 | OpenAI 兼容格式对话，支持 tools 字段适配 |
-| POST | `/v1/messages` | 是 | Anthropic 兼容格式对话，支持 tool_use 字段适配 |
-| POST | `/v1/messages/count_tokens` | 是 | Token 估算 |
-| GET | `/usage/local` | 是 | 本地用量估算 |
-| POST | `/usage/reset-local` | 是 | 重置本地用量统计 |
+| GET | `/health` | 无 | 健康检查 |
+| GET | `/v1/models` | 网关密钥 | 模型列表（含 credit 倍率） |
+| POST | `/v1/chat/completions` | 网关密钥 | OpenAI 兼容对话，支持 tools 字段适配 |
+| POST | `/v1/messages` | 网关密钥 | Anthropic 兼容对话，支持 tool_use 字段适配 |
+| POST | `/v1/messages/count_tokens` | 网关密钥 | Token 估算 |
+| GET | `/usage/local` | 网关密钥 | 本地用量估算 |
+| POST | `/usage/reset-local` | 网关密钥 | 重置本地用量统计 |
+| POST | `/admin/login` | 无（限速） | 登录管理台，返回 `token` 与 `mustChangePassword` |
+| POST | `/admin/change-password` | 管理会话 | 修改密码（默认密码会被强制修改） |
+| POST | `/admin/logout` | 管理会话 | 注销当前会话 |
+
+### 请求参数（`/v1/chat/completions`）
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `messages` | array | 是 | OpenAI 消息结构（`role` / `content`） |
+| `model` | string | 否 | 默认 `qoder-cn`；可选模型见「配置参考」 |
+| `stream` | boolean | 否 | 默认 `false`，SSE 增量输出 |
+| `tools` | array | 否 | OpenAI tools 结构（文本层适配，见「工作原理」） |
+| `reasoning_effort` | string | 否 | `low` / `medium` / `high` / `max`，也支持 `reasoning.effort` 写法 |
+| `context_window` | number | 否 | 覆盖上下文窗口 |
+| `max_tokens` | number | 否 | 覆盖最大输出 token |
+
+`/v1/messages` 为 Anthropic 标准请求结构（`model` / `max_tokens` / `system` / `messages`），参数同名映射。
+
+### 响应示例
+
+**模型列表** `GET /v1/models`：
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen3.8-max",
+      "object": "model",
+      "created": 0,
+      "owned_by": "qodercn",
+      "name": "Qwen3.8 Max",
+      "capabilities": { "reasoning": true },
+      "rate": 1.0,
+      "is_free": false
+    }
+  ]
+}
+```
+
+**非流式对话** `POST /v1/chat/completions`（思考类模型带 `reasoning_content`，DeepSeek 生态约定）：
+
+```json
+{
+  "id": "chatcmpl-1760000000000",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "qoder-cn",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "你好！",
+        "reasoning_content": "用户在打招呼，简短回应即可。"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": { "prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20 }
+}
+```
+
+**流式对话** `stream: true`（SSE，`data:` 行以空行分隔，结束帧为 `data: [DONE]`）：
+
+```text
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"思考过程…"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"你好！"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+Anthropic 口径（`POST /v1/messages` 流式）依次发 `message_start` → `content_block_start` → `content_block_delta`（`text_delta` / `thinking_delta`）→ `content_block_stop` → `message_delta`（`stop_reason: "end_turn"`）→ `message_stop`。
+
+### 错误格式与错误码
+
+OpenAI 口径（`/v1/*` 默认）：
+
+```json
+{ "error": { "message": "…", "type": "invalid_request_error", "code": "invalid_request" } }
+```
+
+Anthropic 口径（`/v1/messages*`）：
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "…" } }
+```
+
+常见错误码：
+
+| 状态码 | code | 含义 |
+|--------|------|------|
+| 400 | `invalid_request` / `invalid_messages` / `unsupported_role` | 请求体或 messages 结构不合法 |
+| 401 | `invalid_api_key` | 密钥缺失或错误 |
+| 401 | `cli_token_missing` | 没有任何已配置的 Qoder 账号可用 |
+| 401 | `unauthorized` | 管理会话未登录或已过期 |
+| 403 | `default_password` | 默认密码未修改，管理接口被拒（见首登强制改密） |
+| 403 | `no_account_granted` | 该用户未被授权任何账号 |
+| 403 | `host_not_allowed` / `origin_not_allowed` | Host / Origin 校验失败（DNS rebinding、跨源防护） |
+| 429 | `quota_exceeded` | 用户配额超限（日/月 token 或请求数） |
+| 502 | `cli_not_found` / `upstream_error` | CLI 未安装或上游返回错误 |
+| 503 | `no_available_account` | 账号池无可用账号（全部冷却或额度耗尽） |
+| 504 | `upstream_timeout` | 请求超时 |
 
 ## 安全边界
 
@@ -308,7 +458,7 @@ x-api-key: <PROXY_API_KEY>
 
 ### 报告安全问题
 
-请不要在公开 issue 里报告漏洞，使用 GitHub 的私密报告入口：[Report a vulnerability](https://github.com/avaritiachaos/qoder-cli-proxy/security/advisories/new)。详见 [SECURITY.md](SECURITY.md)。
+请不要在公开 issue 里报告漏洞，使用 GitHub 的私密报告入口：[Report a vulnerability](https://github.com/0paquer/qoder-cli-proxy/security/advisories/new)。详见 [SECURITY.md](SECURITY.md)。
 
 ## 测试
 

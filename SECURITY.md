@@ -6,7 +6,7 @@ This project is intended for local development and learning only.
 
 **Please do not open a public issue for a vulnerability.** Use GitHub's private
 reporting form instead:
-[Report a vulnerability](https://github.com/avaritiachaos/qoder-proxy/security/advisories/new)
+[Report a vulnerability](https://github.com/0paquer/qoder-cli-proxy/security/advisories/new)
 
 This keeps the report visible only to the maintainers until a fix ships. It
 requires no email address from either side.
@@ -24,7 +24,8 @@ reasonable window before disclosing publicly.
 
 The proxy is designed to be reachable **only from the machine it runs on**:
 
-- It binds to `127.0.0.1` and does not offer an option to bind elsewhere.
+- It binds to `127.0.0.1` by default. `BIND_HOST` can change that, but a
+  non-loopback bind prints a loud startup warning.
 - Browser requests are accepted only from loopback origins. Any other `Origin`
   is refused with `403`, because otherwise any web page you visited could spend
   your Qoder quota from the background.
