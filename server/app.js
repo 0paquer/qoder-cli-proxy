@@ -559,7 +559,9 @@ function createApp() {
     if (db.verifyAdminUser(username, password)) {
       clearLoginFailures(req);
       const token = db.createSession(username, 24); // 24小时有效期
-      res.json({ ok: true, token });
+      // 仍在使用初始默认密码时告知前端弹「首登改密」弹窗；
+      // 未改密前 adminGuard 会在 API 层强制拦截（403 default_password）
+      res.json({ ok: true, token, mustChangePassword: db.isDefaultAdminPassword(username) });
     } else {
       recordLoginFailure(req);
       res.json({ ok: false, error: '用户名或密码错误' });
@@ -600,7 +602,15 @@ function createApp() {
     if (!username || !newPassword) {
       return openAiError(res, new AppError(400, 'invalid_request', '用户名和新密码不能为空'));
     }
-    
+
+    // 不允许改回初始默认密码，否则「首登改密」强制会被无限绕过
+    if (newPassword === db.DEFAULT_ADMIN_PASSWORD) {
+      return openAiError(
+        res,
+        new AppError(400, 'invalid_request', '新密码不能与初始默认密码相同，请设置其他密码')
+      );
+    }
+
     // 吊销该用户其他会话；保留当前 token，操作者改密后无需重新登录
     const auth = req.headers.authorization;
     const currentToken = auth && auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';

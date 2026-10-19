@@ -603,6 +603,71 @@ test('/admin/me works for any logged-in user and rejects strangers', async () =>
   }
 });
 
+test('forced first-login password change: default admin is locked out until changed', async () => {
+  const db = require('../server/db');
+  // 模拟 initialize() 的种子行为（本文件不调用 initialize）
+  const seeded = db.createAdminUser('admin', 'admin123', 'admin');
+  assert.equal(seeded.ok, true, 'fresh test DB should not have a default admin yet');
+
+  const app = createApp();
+  const { server, baseUrl } = await listen(app);
+  try {
+    // 登录响应携带 mustChangePassword 标记
+    const loginRes = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    });
+    const loginBody = await loginRes.json();
+    assert.equal(loginBody.ok, true);
+    assert.equal(loginBody.mustChangePassword, true);
+    const headers = { authorization: `Bearer ${loginBody.token}` };
+
+    // 默认密码未改：白名单外的管理接口一律 403 default_password
+    const users = await authedFetch(baseUrl, headers, '/admin/users');
+    assert.equal(users.status, 403);
+    assert.equal((await users.json()).error.code, 'default_password');
+
+    // 白名单端点保持可用：/me 独立于 adminGuard
+    const me = await fetch(`${baseUrl}/admin/me`, {
+      headers: { authorization: headers.authorization },
+    });
+    assert.equal(me.status, 200);
+
+    // 不允许改回默认密码
+    const revert = await authedFetch(baseUrl, headers, '/admin/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'admin', newPassword: 'admin123' }),
+    });
+    assert.equal(revert.status, 400);
+
+    // 正常改密成功
+    const change = await authedFetch(baseUrl, headers, '/admin/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'admin', newPassword: 'new-admin-pass-9' }),
+    });
+    assert.equal(change.status, 200);
+
+    // 改密后：mustChangePassword 变为 false，管理接口放行
+    const relRes = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'new-admin-pass-9' }),
+    });
+    const relBody = await relRes.json();
+    assert.equal(relBody.ok, true);
+    assert.equal(relBody.mustChangePassword, false);
+    const usersAfter = await authedFetch(
+      baseUrl,
+      { authorization: `Bearer ${relBody.token}` },
+      '/admin/users'
+    );
+    assert.equal(usersAfter.status, 200);
+  } finally {
+    server.close();
+  }
+});
+
 test('balancer: persistent failures are classified and cool down for an hour', async () => {
   const balancer = require('../server/balancer');
   const { db } = require('../server/db');

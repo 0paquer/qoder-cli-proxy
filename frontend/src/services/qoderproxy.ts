@@ -178,7 +178,7 @@ function check<T>(data: T): T {
 export async function login(
   username: string,
   password: string,
-): Promise<{ ok: boolean; token?: string; error?: string }> {
+): Promise<{ ok: boolean; token?: string; mustChangePassword?: boolean; error?: string }> {
   return request('/admin/login', {
     method: 'POST',
     data: { username, password },
@@ -201,6 +201,7 @@ export async function changePassword(
   return request('/admin/change-password', {
     method: 'POST',
     data: { username, newPassword },
+    skipErrorHandler: true,
   });
 }
 

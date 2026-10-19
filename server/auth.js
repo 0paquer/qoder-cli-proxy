@@ -414,6 +414,29 @@ function adminGuard(req, res, next) {
     // Role-aware: only admins pass the admin guard.
     const user = require('./stores/users').getUserByUsername(session.username);
     if (user && user.enabled && user.role === 'admin') {
+      // 首登改密强制：admin 仍在使用初始默认密码时，除白名单端点外一律 403，
+      // 迫使首次部署先改掉默认密码再执行任何管理操作。PROXY_API_KEY 分支
+      // 不受影响（脚本自动化场景没有初始密码的概念）。
+      if (db.isDefaultAdminPassword(user.username)) {
+        // adminGuard 同时挂在 app 级路由（req.path = /admin/xxx）与
+        // /admin 挂载的 router 内（req.path = /xxx），归一化后再比对。
+        const p = String(req.path || '');
+        const bare = p === '/admin' || p.startsWith('/admin/') ? p.slice('/admin'.length) : p;
+        const allowed = new Set(['/change-password', '/logout', '/me']);
+        if (!allowed.has(bare)) {
+          return respondWithError(
+            req,
+            res,
+            new AppError(
+              403,
+              'default_password',
+              'Admin is still using the initial default password. ' +
+                'Change it first via POST /admin/change-password before calling other admin APIs.',
+              'permission_error'
+            )
+          );
+        }
+      }
       req.principal = {
         type: 'session',
         userId: user.id,

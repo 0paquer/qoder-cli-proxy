@@ -5,6 +5,10 @@ const crypto = require('crypto');
 // QODER_PROXY_DB overrides the database location (tests / portable setups)
 const DB_PATH = process.env.QODER_PROXY_DB || path.join(__dirname, '..', 'data', 'qoder-proxy.db');
 
+// 首次启动创建的初始管理员密码。仅用于种子账号与「首登改密」强制检测，
+// 不要在业务代码里硬编码字面量。
+const DEFAULT_ADMIN_PASSWORD = 'admin123';
+
 // Ensure data directory exists
 const fs = require('fs');
 const dataDir = path.dirname(DB_PATH);
@@ -147,6 +151,15 @@ function verifyAdminUser(username, password) {
   const user = db.prepare('SELECT * FROM user WHERE username = ?').get(username);
   if (!user || !user.enabled) return false;
   return verifyPassword(user, password);
+}
+
+/**
+ * 检测用户密码是否仍为初始默认值（admin123）。
+ * 登录响应据此返回 mustChangePassword 标记；adminGuard 据此在 API 层
+ * 强制「首登改密」（白名单外一律 403 default_password）。
+ */
+function isDefaultAdminPassword(username) {
+  return verifyAdminUser(username, DEFAULT_ADMIN_PASSWORD);
 }
 
 function changeAdminPassword(username, newPassword, exceptToken) {
@@ -301,8 +314,8 @@ function initialize() {
   // Create default admin user if not exists
   const existingUsers = getAdminUsers();
   if (existingUsers.length === 0) {
-    createAdminUser('admin', 'admin123', 'admin');
-    console.log('[db] Created default admin user: admin / admin123');
+    createAdminUser('admin', DEFAULT_ADMIN_PASSWORD, 'admin');
+    console.log('[db] Created default admin user: admin / ' + DEFAULT_ADMIN_PASSWORD);
   }
 
   // 迁移旧版 ISO 格式 expires_at（'...T...Z'）为 SQLite datetime 格式，
@@ -328,6 +341,8 @@ module.exports = {
   // Admin Users
   createAdminUser,
   verifyAdminUser,
+  isDefaultAdminPassword,
+  DEFAULT_ADMIN_PASSWORD,
   changeAdminPassword,
   getAdminUsers,
   

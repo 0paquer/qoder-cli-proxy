@@ -24,6 +24,17 @@ export const errorConfig: RequestConfig = {
         return;
       }
 
+      // 403 default_password：管理员仍在使用初始默认密码且未走改密白名单接口，
+      // 清 token 踢回登录页（登录后会弹出强制改密弹窗）
+      if (status === 403 && error?.response?.data?.error?.code === 'default_password') {
+        clearToken();
+        message.warning('请先修改初始默认密码');
+        if (window.location.pathname !== loginPath) {
+          history.replace(loginPath);
+        }
+        return;
+      }
+
       const apiMessage =
         error?.response?.data?.error?.message ||
         (typeof error?.response?.data === 'string' ? error.response.data : undefined) ||

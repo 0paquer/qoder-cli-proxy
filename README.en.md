@@ -90,7 +90,7 @@ On Windows you can also double-click `start-proxy.cmd`. Default address: `http:/
 
 On first start the proxy creates `data/` (SQLite database + AES master key), runs migrations, and seeds a default admin account:
 
-> **The default admin is `admin` / `admin123`. Change the password immediately after first login.** Do not bind the proxy to a non-loopback address before the default password is changed.
+> **The default admin is `admin` / `admin123`. First login forces a password-change flow: admin APIs are rejected until the default password is changed, so nothing relies on manual diligence.** Do not bind the proxy to a non-loopback address before the default password is changed.
 
 **Step 4: verify**
 
@@ -292,7 +292,7 @@ Treat the feature as experimental, and pair it with `PROXY_API_KEY`.
 ### Safety Recommendations
 
 - Use only on your own machine, bound to `127.0.0.1`
-- Change the default admin password (`admin` / `admin123`) immediately after first login
+- The default admin password (`admin` / `admin123`) is force-changed on first login and cannot be skipped
 - Do not bind to `0.0.0.0` and do not expose the service to the public internet; if LAN access is truly needed, set `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` and keep `PROXY_API_KEY` configured
 - Do not send your Token — or the `data/` directory (it holds the encryption master key) — to anyone
 - Do not commit `.env` to Git
