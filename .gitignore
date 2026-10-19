@@ -19,3 +19,7 @@ data/
 
 # Frontend build output (deployed copy lives in public/)
 frontend/dist/
+
+# Fresh-clone deploy test directories (temporary, never commit)
+.fresh-test/
+qoder-proxy-fresh-test/
