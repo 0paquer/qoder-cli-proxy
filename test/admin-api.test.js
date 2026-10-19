@@ -12,7 +12,7 @@ delete process.env.PROXY_API_KEY; // deterministic: gateway starts open
 
 require('../server/migrations').runMigrations(require('../server/db').db);
 
-const qoderCli = require('../server/qoder-sdk');
+const qoderCli = require('../server/qoder-session');
 const { createApp, resetLoginRateLimit } = require('../server/app');
 const { AppError } = require('../server/errors');
 const accountsStore = require('../server/stores/accounts');
@@ -885,7 +885,7 @@ test('admin restart: port optional (empty body restarts with current config)', a
 test('account usage query: cached and account-scoped', async () => {
   const app = createApp();
   const { server, baseUrl } = await listen(app);
-  const sdkEngine = require('../server/qoder-sdk');
+  const sdkEngine = require('../server/qoder-session');
   const originalLoadUsage = sdkEngine.loadAccountUsage;
   let accA = null;
   let accB = null;

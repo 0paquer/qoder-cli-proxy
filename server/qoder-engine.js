@@ -1,7 +1,7 @@
 /**
  * 引擎出口：统一由 Agent SDK 驱动对话执行。
  *
- *   server/qoder-sdk.js —— @qoder-ai/qoder-agent-sdk（SDK 底层经
+ *   server/qoder-session.js —— @qoder-ai/qoder-agent-sdk（SDK 底层经
  *   spawnQoderCLIProcess 钩子拉起 qoderclicn 进程，warm pool 预热）。
  *
  * 其余导出（getCliBackend / buildChildEnv 等）回落到 cli-runtime；
@@ -9,7 +9,7 @@
  * （测试 mock、热更新）仍然生效。
  */
 const runtime = require('./cli-runtime');
-const sdkEngine = require('./qoder-sdk');
+const sdkEngine = require('./qoder-session');
 
 module.exports = Object.assign(Object.create(runtime), {
   runQoderCnCli(options) {

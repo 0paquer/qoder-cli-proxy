@@ -1,7 +1,7 @@
 /**
  * CLI 运行时工具集：Agent SDK 拉起 qoderclicn/qodercli 进程所需的公共能力。
  *
- * 对话执行已全部由 server/qoder-sdk.js（@qoder-ai/qoder-agent-sdk）承担，
+ * 对话执行已全部由 server/qoder-session.js（@qoder-ai/qoder-agent-sdk）承担，
  * 本模块只保留 SDK 依赖的底层函数：
  *   - resolveCliCommand / buildSpawnCommand —— Windows .cmd shim 解析，
  *     SDK 的 spawnQoderCLIProcess 钩子据此把命令解析为 node + bundle

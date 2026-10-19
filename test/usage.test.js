@@ -8,7 +8,7 @@ const os = require('node:os');
 process.env.QODER_PROXY_DB = path.join(os.tmpdir(), `qoder-proxy-usage-${Date.now()}.db`);
 require('../server/migrations').runMigrations(require('../server/db').db);
 
-const qoderCli = require('../server/qoder-sdk');
+const qoderCli = require('../server/qoder-session');
 const { createApp } = require('../server/app');
 const { resetUsage, getUsage } = require('../server/usage');
 
