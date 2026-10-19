@@ -211,7 +211,9 @@ function requireToken(backend, token) {
     throw new AppError(
       401,
       'cli_token_missing',
-      `${backend.tokenEnvVar} is not configured. Set it in .env or run \`${backend.command} login\` first.`,
+      `No Qoder account is available: no account exists in the registry and ${backend.tokenEnvVar} ` +
+        'is not set. Add an account in the admin console (Accounts page), or keep ' +
+        `${backend.tokenEnvVar} in .env for legacy single-account mode.`,
       'authentication_error'
     );
   }
