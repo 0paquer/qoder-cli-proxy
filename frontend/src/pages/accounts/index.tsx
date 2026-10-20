@@ -419,42 +419,33 @@ const AccountPage: React.FC = () => {
       <Modal
         title={editing ? `编辑账号：${editing.name}` : '新建账号'}
         open={modalOpen}
-        width={520}
+        width={720}
         confirmLoading={saving}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
         destroyOnHidden
       >
+        {/* 两列布局压缩纵向高度：短字段各占一格，PAT 长输入独占整行 */}
         <Form form={form} layout="vertical" className="pt-2">
-          <Form.Item
-            label="名称"
-            name="name"
-            rules={[{ required: true, message: '请输入账号名称' }]}
-          >
-            <Input placeholder="例如：work-account-1" />
-          </Form.Item>
-          <Form.Item label="后端类型" name="backendType" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { label: 'CN（qoder.com.cn）', value: 'cn' },
-                { label: 'Global（qoder.com）', value: 'global' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="接入点" name="baseUrl" extra="留空使用官方默认接入点">
-            <Input placeholder="https://..." />
-          </Form.Item>
-          {!editing && (
+          <div className="grid grid-cols-2 gap-x-6">
             <Form.Item
-              label="PAT"
-              name="pat"
-              rules={[{ required: true, message: '请输入 PAT' }]}
-              extra="加密存储，不会再次显示"
+              label="名称"
+              name="name"
+              rules={[{ required: true, message: '请输入账号名称' }]}
             >
-              <Input.TextArea rows={2} placeholder="粘贴 Qoder Personal Access Token" />
+              <Input placeholder="例如：work-account-1" />
             </Form.Item>
-          )}
-          <div className="grid grid-cols-2 gap-4">
+            <Form.Item label="后端类型" name="backendType" rules={[{ required: true }]}>
+              <Select
+                options={[
+                  { label: 'CN（qoder.com.cn）', value: 'cn' },
+                  { label: 'Global（qoder.com）', value: 'global' },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item label="接入点" name="baseUrl" extra="留空使用官方默认接入点">
+              <Input placeholder="https://..." />
+            </Form.Item>
             <Form.Item
               label="权重"
               name="weight"
@@ -471,10 +462,21 @@ const AccountPage: React.FC = () => {
             >
               <InputNumber min={0} max={100} className="w-full" />
             </Form.Item>
+            <Form.Item label="备注" name="remark">
+              <Input placeholder="选填" />
+            </Form.Item>
+            {!editing && (
+              <Form.Item
+                label="PAT"
+                name="pat"
+                rules={[{ required: true, message: '请输入 PAT' }]}
+                extra="加密存储，不会再次显示"
+                className="col-span-2 [&_.ant-form-item-extra]:mt-1"
+              >
+                <Input.TextArea rows={2} placeholder="粘贴 Qoder Personal Access Token" />
+              </Form.Item>
+            )}
           </div>
-          <Form.Item label="备注" name="remark">
-            <Input placeholder="选填" />
-          </Form.Item>
         </Form>
       </Modal>
 
