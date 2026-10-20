@@ -14,7 +14,8 @@
  */
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { query, accessToken, startDaemon } = require('@qoder-ai/qoder-agent-sdk');
+const { query, accessToken } = require('@qoder-ai/qoder-agent-sdk');
+const daemonPool = require('./daemon-pool');
 const { AppError } = require('./errors');
 const { redactString } = require('./redact');
 const { resolveModelRoute } = require('./models');
@@ -93,8 +94,8 @@ function buildSdkEnv(baseUrl) {
  * bundle 加载），进程用完即弃（SDK abort 语义），取走/冷启动的同时
  * 学习式补位下一个热进程。QODER_WARM_POOL=0 可整体关闭。
  *
- * 仅对话路径入池（ctx.pool=true）；额度等控制面查询参数指纹不同，
- * 入池只会挤占 maxTotal 名额，一律绕过。
+ * 仅对话路径入池（ctx.pool=true）。控制面查询（模型/用量）已迁至
+ * daemon-pool.js 的独立常驻 daemon 池，不走本池、互不挤占名额。
  */
 function buildSpawnCli(backend, ctx = {}) {
   return (sdkOptions) => {
@@ -649,66 +650,84 @@ function normalizeUsageInfo(info) {
   };
 }
 
+/**
+ * 控制面 RPC 超时/取消包装：超时或 signal 中止即拒绝调用方；不中止常驻
+ * daemon（查询只读无副作用，让其自然完成）。
+ */
+function withControlTimeout(promise, timeout, signal, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(
+      () => finish(reject, new AppError(504, 'upstream_timeout', timeoutMessage)),
+      timeout
+    );
+    const onAbort = () =>
+      finish(reject, new AppError(499, 'request_cancelled', 'Request was cancelled by the client.'));
+    function finish(fn, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener?.('abort', onAbort);
+      fn(value);
+    }
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    promise.then((value) => finish(resolve, value), (error) => finish(reject, error));
+  });
+}
+
 async function loadAccountUsage({ token, baseUrl, backendType, timeoutMs, signal } = {}) {
   const backend = cli.getCliBackend(backendType);
   const effectiveToken = requireToken(backend, token);
   const stderrRef = { value: '' };
-  const controller = new AbortController();
-
-  // streaming input 且永不产出消息：会话初始化但不发送任何对话轮次，
-  // get_usage_info 是控制协议请求（daemon 面应答），零 token 消耗。
-  async function* neverYield() {}
-
   const timeout = Number(timeoutMs || process.env.QODERCN_TIMEOUT_MS || USAGE_TIMEOUT_MS);
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeout);
-  const onAbort = () => controller.abort();
-  if (signal) {
-    if (signal.aborted) {
-      clearTimeout(timer);
-      throw new AppError(499, 'request_cancelled', 'Request was cancelled by the client.');
-    }
-    signal.addEventListener('abort', onAbort, { once: true });
+  if (signal && signal.aborted) {
+    throw new AppError(499, 'request_cancelled', 'Request was cancelled by the client.');
   }
 
-  try {
-    const { options } = buildQueryOptions({
-      backend,
-      token: effectiveToken,
-      baseUrl,
-      stderrRef,
-      signal: undefined,
-      stream: false,
-      pool: false, // 控制面查询不入池，避免异构指纹挤占对话预热名额
-    });
-    // 额度查询不涉及模型与推理参数。
-    delete options.model;
-    delete options.systemPrompt;
-    delete options.extraArgs;
-    options.abortController = controller;
+  // 控制面 daemon 常驻池：每账号复用一个常驻 daemon（getUsageInfo 热响应
+  // <100ms），免去每次 startDaemon 约 7s 的初始化；查询失败即剔除坏进程。
+  const keyInput = { token: effectiveToken, baseUrl, backendType };
+  const bundleSpec = cli.buildSpawnCommand(
+    cli.resolveCliCommand(process.env.CLI_COMMAND || process.env.QODERCN_CLI_PATH || backend.command),
+    [],
+    backend
+  );
+  const bundlePath = bundleSpec.args && bundleSpec.args[0];
 
-    const q = query({ prompt: neverYield(), options });
-    const info = await q.getUsageInfo();
+  let acquired;
+  try {
+    acquired = await daemonPool.getDaemon(keyInput, {
+      auth: accessToken(effectiveToken),
+      ...(bundlePath ? { pathToQoderCLIExecutable: bundlePath } : {}),
+      env: buildSdkEnv(baseUrl),
+      stderr: (data) => {
+        stderrRef.value = stderrRef.value
+          ? `${stderrRef.value}${data}`.slice(-STDERR_TAIL_BYTES)
+          : String(data).slice(-STDERR_TAIL_BYTES);
+      },
+    });
+    const info = await withControlTimeout(
+      acquired.daemon.getUsageInfo(),
+      timeout,
+      signal,
+      'Usage query timed out.'
+    );
     const usage = normalizeUsageInfo(info);
     if (!usage || usage.buckets.length === 0) {
       throw new AppError(502, 'upstream_error', 'Usage query succeeded but returned no quota data.');
     }
     return { ok: true, usage };
   } catch (error) {
+    // 查询失败：坏进程剔除，下次取用重建（失败不保留）。
+    await daemonPool.drop(keyInput);
     if (error instanceof AppError) throw error;
-    throw mapSdkError(error, {
-      backend,
-      stderrTail: stderrRef.value,
-      timedOut,
-      clientAborted: Boolean(signal && signal.aborted),
-    });
+    throw new AppError(
+      502,
+      'upstream_error',
+      `Usage query failed: ${redactString(String((error && error.message) || error))}`
+    );
   } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener?.('abort', onAbort);
-    controller.abort(); // 查询结束即终止 CLI 会话，不留常驻进程
+    if (acquired && acquired.release) await acquired.release();
   }
 }
 
@@ -748,18 +767,21 @@ async function loadModelCatalog({ token, baseUrl, backendType, timeoutMs, force 
   );
   const bundlePath = spec.args && spec.args[0];
   const timeout = Number(timeoutMs || process.env.QODERCN_TIMEOUT_MS || CATALOG_TIMEOUT_MS);
+  const keyInput = { token: effectiveToken, baseUrl, backendType };
 
-  let daemon = null;
+  let acquired = null;
   let raceTimer = null;
   try {
-    daemon = await startDaemon({
+    // 控制面 daemon 常驻池：复用同账号 daemon（初始化约 7s → 热响应
+    // <100ms）。force 实时查询同样命中常驻进程，只读控制请求复用安全。
+    acquired = await daemonPool.getDaemon(keyInput, {
       auth: accessToken(effectiveToken),
       ...(bundlePath ? { pathToQoderCLIExecutable: bundlePath } : {}),
       env: buildSdkEnv(baseUrl),
       stderr: () => {},
     });
     const raw = await Promise.race([
-      daemon.getModels(),
+      acquired.daemon.getModels(),
       new Promise((_, reject) => {
         raceTimer = setTimeout(
           () => reject(new AppError(504, 'upstream_timeout', 'Model catalog query timed out.')),
@@ -789,14 +811,13 @@ async function loadModelCatalog({ token, baseUrl, backendType, timeoutMs, force 
     console.error(
       `[model-catalog] query failed: ${redactString((error && error.message) || String(error)).trim()}`
     );
+    // 查询失败：坏进程剔除，下次取用重建（失败不保留）。
+    await daemonPool.drop(keyInput);
     if (error instanceof AppError) throw error;
     throw mapSdkError(error, { backend, stderrTail: '', timedOut: false, clientAborted: false });
   } finally {
-    try {
-      if (daemon) await daemon.stop();
-    } catch (_) {
-      // stop 失败不影响结果。
-    }
+    clearTimeout(raceTimer);
+    if (acquired && acquired.release) await acquired.release();
   }
 }
 
