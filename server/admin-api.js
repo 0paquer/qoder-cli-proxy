@@ -329,10 +329,18 @@ function createAdminApi() {
       const baseUrl = account.baseUrl || undefined;
       const backendType = account.backendType || 'cn';
       const catalog = await qoderCli.loadModelCatalog({ token: pat, baseUrl, backendType });
-      // 完整透传：条目直接展开 CLI 原始 ModelInfo（value/displayName/
-      // priceFactor/isFree/isReasoning/isDefault/isEnabled/...），不做包装。
+      // 字段语义与 /v1/models 统一：id = CLI 内部代号（直发即可调用），
+      // value/displayName = 模型正式名称；其余原始 ModelInfo 字段原样透传。
       const models = (catalog.models || [])
-        .map((m) => (m && typeof m === 'object' && m.raw ? { ...m.raw } : null))
+        .filter((m) => m && typeof m === 'object')
+        .map((m) => {
+          const raw = m.raw && typeof m.raw === 'object' ? m.raw : null;
+          const code = String(m.id ?? '').trim() || String(raw?.modelId ?? raw?.value ?? '').trim();
+          const official =
+            String(m.name ?? '').trim() || String(raw?.displayName ?? raw?.value ?? '').trim();
+          if (!code) return null;
+          return { ...(raw || {}), value: official || code, displayName: official || code, id: code };
+        })
         .filter(Boolean);
       const ok = models.length > 0;
       accountModelsCache.set(accountId, { at: Date.now(), ok, models });

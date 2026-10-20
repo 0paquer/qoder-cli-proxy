@@ -76,14 +76,20 @@ const verifyTag = (s: Account['verifyStatus']) => {
   return <Tag>未验证</Tag>;
 };
 
+/** 模型内部代号：新语义取 id，兼容旧条目 value/modelId，静态表取 id。 */
+const codeOf = (m: { id?: string; value?: string; modelId?: unknown }) =>
+  String(m.id ?? m.value ?? m.modelId ?? '').trim();
+
 /** 模型下拉标签：单行显示名称，免费为附加标签，右侧恒显 credit 倍率。 */
 const modelOptionLabel = (m: {
-  value: string;
+  value?: string;
+  id?: string;
+  name?: string;
   displayName?: string;
   priceFactor?: number | null;
   isFree?: boolean;
 }) => {
-  const name = m.displayName || m.value;
+  const name = m.displayName || m.name || m.value || m.id;
   const rate = m.priceFactor ?? null;
   return (
     <div className="flex items-center justify-between gap-3">
@@ -100,21 +106,34 @@ const modelOptionLabel = (m: {
   );
 };
 
-/** 默认选中：优先免费模型，其次 credit 倍率最低者；无倍率数据取第一个。 */
-const pickDefaultModel = (list: { value: string; priceFactor?: number | null; isFree?: boolean }[]) => {
+/** 默认选中：优先免费模型，其次 credit 倍率最低者；无倍率数据取第一个。返回内部代号。 */
+const pickDefaultModel = (list: {
+  id?: string;
+  value: string;
+  modelId?: unknown;
+  priceFactor?: number | null;
+  isFree?: boolean;
+}[]) => {
   const rated = list.filter((m) => m.priceFactor != null);
-  if (!rated.length) return list[0]?.value;
+  if (!rated.length) return list[0] ? codeOf(list[0]) : undefined;
   const best = [...rated].sort((a, b) => {
     if (a.isFree !== b.isFree) return a.isFree ? -1 : 1;
     return (a.priceFactor ?? 0) - (b.priceFactor ?? 0);
   })[0];
-  return best.value;
+  return codeOf(best);
 };
 
 const PlaygroundPage: React.FC = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [models, setModels] = useState<
-    { value: string; displayName?: string; priceFactor?: number | null; isFree?: boolean }[]
+    {
+      id?: string;
+      value: string;
+      name?: string;
+      displayName?: string;
+      priceFactor?: number | null;
+      isFree?: boolean;
+    }[]
   >([]);
   const [accountId, setAccountId] = useState<number | undefined>(undefined);
   const [model, setModel] = useState<string>('qoder-cn');
@@ -156,7 +175,7 @@ const PlaygroundPage: React.FC = () => {
         setModelsSource(r.source ?? 'static');
         // 默认选中低倍率模型（免费优先，省 credits）；用户手动选过则保留
         setModel((cur) =>
-          userPickedRef.current && r.models.some((m) => m.value === cur)
+          userPickedRef.current && r.models.some((m) => codeOf(m) === cur)
             ? cur
             : (pickDefaultModel(r.models) ?? cur),
         );
@@ -381,9 +400,9 @@ const PlaygroundPage: React.FC = () => {
                 )
               }
               options={models.map((m) => ({
-                value: m.value,
+                value: codeOf(m),
                 label: modelOptionLabel(m),
-                searchText: `${m.displayName ?? ''} ${m.value}`.toLowerCase(),
+                searchText: `${m.displayName ?? ''} ${m.id ?? ''} ${m.value}`.toLowerCase(),
               }))}
             />
           </div>
