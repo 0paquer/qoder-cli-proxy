@@ -362,6 +362,53 @@ const PlaygroundPage: React.FC = () => {
           </div>
         </div>
 
+        {currentAccount && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-medium text-indigo-500">
+              {currentAccount.backendType === 'cn' ? 'CN 后端' : 'Global 后端'}
+            </span>
+            <span className="inline-flex items-center rounded-full border border-gray-100 bg-white px-2.5 py-0.5 text-[11px] text-gray-500">
+              接入点：{currentAccount.baseUrl || '官方默认'}
+            </span>
+            {currentAccount.patFingerprint && (
+              <span className="inline-flex items-center rounded-full border border-gray-100 bg-white px-2.5 py-0.5 font-mono text-[11px] text-gray-500">
+                PAT ····{currentAccount.patFingerprint}
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-100 bg-white px-2.5 py-0.5 text-[11px] text-gray-500">
+              <span
+                className={`inline-block h-1.5 w-1.5 rounded-full ${
+                  currentAccount.verifyStatus === 'verified'
+                    ? 'bg-emerald-400'
+                    : currentAccount.verifyStatus === 'failed'
+                      ? 'bg-red-400'
+                      : 'bg-gray-300'
+                }`}
+              />
+              {currentAccount.verifyStatus === 'verified'
+                ? '已验证'
+                : currentAccount.verifyStatus === 'failed'
+                  ? '验证失败'
+                  : '未验证'}
+            </span>
+            <span className="inline-flex items-center rounded-full border border-gray-100 bg-white px-2.5 py-0.5 text-[11px] text-gray-500">
+              权重 {currentAccount.weight} · 并发 {currentAccount.maxConcurrency}
+            </span>
+            {currentAccount.cooldownUntil && new Date(currentAccount.cooldownUntil) > new Date() && (
+              <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-0.5 text-[11px] text-orange-500">
+                冷却至 {new Date(currentAccount.cooldownUntil).toLocaleTimeString()}
+              </span>
+            )}
+            {currentAccount.remark && (
+              <Tooltip title={currentAccount.remark}>
+                <span className="inline-flex max-w-[220px] items-center truncate rounded-full border border-gray-100 bg-white px-2.5 py-0.5 text-[11px] text-gray-500">
+                  备注：{currentAccount.remark}
+                </span>
+              </Tooltip>
+            )}
+          </div>
+        )}
+
         <div className="mt-4 flex h-[calc(100vh-380px)] min-h-[320px] flex-col overflow-hidden rounded-xl border border-gray-100 bg-gradient-to-b from-[#f8f9fe] to-[#f4f6fb]">
           <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
             {!turns.length && !sending && (

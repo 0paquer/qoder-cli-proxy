@@ -279,6 +279,9 @@ const ApiTestPage: React.FC = () => {
               <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={run}>
                 发送测试
               </Button>
+              <Button icon={<CopyOutlined />} onClick={() => copyText(curlCommand, 'cURL 命令')}>
+                复制 cURL
+              </Button>
               <Button icon={<CodeOutlined />} onClick={() => setExampleOpen(true)}>
                 调用示例
               </Button>
