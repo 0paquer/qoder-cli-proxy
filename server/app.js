@@ -760,6 +760,7 @@ async function runToolExecutionLoop({
   requestOptions,
   maxOutputTokens,
   logLabels,
+  resolveModel,
 }) {
   const workingMessages = [...messages];
   let content = '';
@@ -772,12 +773,13 @@ async function runToolExecutionLoop({
     const reply = await invokeCliWithAccounts(
       principal,
       tracker,
-      { backendType: 'cn', rotate: true },
+      // 与对话 handler 同链路：显示名先反查回 CLI 内部代号
+      { backendType: 'cn', rotate: true, resolveModel },
       (cliOpts) =>
         qoderCli.runQoderCnCli(
           buildCliOptions({
             messages: workingMessages,
-            model,
+            model: cliOpts.model || model,
             tools,
             requestOptions,
             maxOutputTokens,
@@ -1371,6 +1373,7 @@ function createApp() {
         tools: normalizedTools,
         requestOptions,
         maxOutputTokens: requestOptions.maxOutputTokens,
+        resolveModel: resolveModelForAccount,
         // 日志文案沿用 chat 前缀，避免改动既有日志检索口径
         logLabels: {
           toolCalls: 'chat tool calls detected',
@@ -1764,6 +1767,7 @@ function createApp() {
         tools,
         requestOptions,
         maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,
+        resolveModel: resolveModelForAccount,
         // 日志文案沿用 anthropic 前缀，避免改动既有日志检索口径
         logLabels: {
           toolCalls: 'anthropic tool calls detected',
