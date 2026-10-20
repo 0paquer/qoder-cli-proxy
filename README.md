@@ -250,7 +250,7 @@ $env:QODERCN_MAX_OUTPUT_TOKENS = "4096"
 
 ## API 文档
 
-> 交互式文档（Swagger UI）：启动后打开 <http://127.0.0.1:3000/ui/swagger.html>；机器可读规范在 `/openapi.json`，由服务端运行时自动生成（路由表自省 + 内置元数据），新增端点无需手动维护文档。
+> 交互式文档（Swagger UI）：启动后打开 <http://127.0.0.1:3000/ui/swagger.html>；机器可读规范在 `/openapi.json`（源文件 [server/openapi.json](server/openapi.json)，手动维护，新增端点时同步更新）。
 
 ### 认证方式
 
