@@ -904,7 +904,7 @@ function createApp() {
 
     if (db.verifyAdminUser(username, password)) {
       clearLoginFailures(req);
-      const token = db.createSession(username, 24); // 24小时有效期
+      const token = db.createSession(username); // 30 分钟无操作过期（滑动续期）
       // 仍在使用初始默认密码时告知前端弹「首登改密」弹窗；
       // 未改密前 adminGuard 会在 API 层强制拦截（403 default_password）
       res.json({ ok: true, token, mustChangePassword: db.isDefaultAdminPassword(username) });

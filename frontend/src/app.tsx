@@ -3,12 +3,49 @@ import type { RequestConfig, RunTimeLayoutConfig } from '@umijs/max';
 import { history } from '@umijs/max';
 import { UserOutlined } from '@ant-design/icons';
 import React from 'react';
+import { message } from 'antd';
 import { AvatarDropdown, ErrorBoundary, OfflineBanner } from '@/components';
 import { clearToken, getMe, type Me } from '@/services/qoderproxy';
 import defaultSettings from '../config/defaultSettings';
 import { errorConfig } from './requestErrorConfig';
 
 const loginPath = '/user/login';
+
+/**
+ * 会话空闲时长（与服务端 SESSION_IDLE_MINUTES 对齐）。
+ * 服务端：30 分钟内无任何已认证请求即过期；客户端提前 1 分钟主动登出，
+ * 抢在服务端 401 之前把用户送到登录页，避免请求报错噪音。
+ */
+const SESSION_IDLE_MS = 29 * 60 * 1000;
+
+/**
+ * 空闲自动登出守卫：只统计真实用户交互（点击/键盘/滚动/移动），
+ * 页面自身的轮询请求不计入活动——用户离开电脑后到点即踢回登录页。
+ */
+const setupIdleSessionGuard = () => {
+  if (typeof window === 'undefined') return;
+  const w = window as typeof window & { __sessionIdleGuard?: boolean };
+  if (w.__sessionIdleGuard) return;
+  w.__sessionIdleGuard = true;
+
+  let lastActivity = Date.now();
+  const touch = () => {
+    lastActivity = Date.now();
+  };
+  ['pointerdown', 'keydown', 'wheel', 'touchstart', 'pointermove'].forEach((event) => {
+    window.addEventListener(event, touch, { passive: true });
+  });
+
+  setInterval(() => {
+    const { pathname } = history.location;
+    const onLogin = pathname === loginPath || pathname === `/ui${loginPath}`;
+    if (!localStorage.getItem('qoder_proxy_token') || onLogin) return;
+    if (Date.now() - lastActivity < SESSION_IDLE_MS) return;
+    clearToken();
+    message.info('登录已超时，请重新登录');
+    history.replace(loginPath);
+  }, 30 * 1000);
+};
 
 /**
  * history.location.pathname 在生产构建带 base 前缀（/ui/user/login），
@@ -26,6 +63,8 @@ export async function getInitialState(): Promise<{
   currentUser?: Me;
   fetchUserInfo?: () => Promise<Me | undefined>;
 }> {
+  setupIdleSessionGuard();
+
   const fetchUserInfo = async (): Promise<Me | undefined> => {
     try {
       const me = await getMe({ skipErrorHandler: true });

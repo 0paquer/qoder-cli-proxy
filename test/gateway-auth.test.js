@@ -147,8 +147,8 @@ test('adminGuard rejects non-admin sessions and accepts admins', async () => {
   const admin = usersStore.createUser({ username: 'boss', password: 'secret123', role: 'admin' });
   const plain = usersStore.createUser({ username: 'peon', password: 'secret123', role: 'user' });
 
-  const adminSession = dbModule.createSession('boss', 1);
-  const userSession = dbModule.createSession('peon', 1);
+  const adminSession = dbModule.createSession('boss', 60);
+  const userSession = dbModule.createSession('peon', 60);
 
   const { server, base } = await listen(buildApp());
   try {

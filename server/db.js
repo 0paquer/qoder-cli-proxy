@@ -194,11 +194,12 @@ function toSqliteDatetime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+const SESSION_IDLE_MINUTES = 30; // 滑动过期：连续 30 分钟无任何已认证请求即失效
 const SESSION_ABSOLUTE_MAX_HOURS = 24 * 7; // 滑动续期的绝对上限：7 天
 
-function createSession(username, expiresInHours = 24) {
+function createSession(username, idleMinutes = SESSION_IDLE_MINUTES) {
   const token = generateToken();
-  const expiresAt = toSqliteDatetime(new Date(Date.now() + expiresInHours * 60 * 60 * 1000));
+  const expiresAt = toSqliteDatetime(new Date(Date.now() + idleMinutes * 60 * 1000));
 
   db.prepare(`
     INSERT INTO sessions (token, username, expires_at) 
@@ -215,11 +216,12 @@ function verifySession(token) {
 
   if (!session) return null;
 
-  // Extend session on each verification（滑动续期，但受 created_at + 7 天绝对上限约束）
+  // Extend session on each verification（滑动续期：无操作 30 分钟后过期，
+  // 每次已认证请求重置该窗口，但受 created_at + 7 天绝对上限约束）
   const createdAtMs = session.created_at
     ? Date.parse(String(session.created_at).replace(' ', 'T') + 'Z')
     : NaN;
-  const slidingMs = Date.now() + 24 * 60 * 60 * 1000;
+  const slidingMs = Date.now() + SESSION_IDLE_MINUTES * 60 * 1000;
   const absoluteMs = Number.isFinite(createdAtMs)
     ? createdAtMs + SESSION_ABSOLUTE_MAX_HOURS * 60 * 60 * 1000
     : slidingMs;
