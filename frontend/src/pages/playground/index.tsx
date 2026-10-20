@@ -7,7 +7,7 @@ import {
   SendOutlined,
   UserSwitchOutlined,
 } from '@ant-design/icons';
-import { Button, Collapse, Descriptions, Segmented, Select, Spin, Tag, Tooltip, message } from 'antd';
+import { Button, Collapse, Segmented, Select, Spin, Tag, Tooltip, message } from 'antd';
 import React, { useEffect, useRef, useState } from 'react';
 import { PageHeader, SectionCard } from '@/components/QpCard';
 import {
@@ -388,103 +388,6 @@ const PlaygroundPage: React.FC = () => {
             />
           </div>
         </div>
-
-        {currentAccount && (
-          <div className="mt-3 rounded-lg border border-gray-100 bg-white/80 px-4 py-1.5">
-            <Descriptions
-              size="small"
-              colon={false}
-              column={{ xs: 2, sm: 3, lg: 6 }}
-              items={[
-                {
-                  key: 'backend',
-                  label: '后端',
-                  children: (
-                    <span className="font-medium text-indigo-500">
-                      {currentAccount.backendType === 'cn' ? 'CN' : 'Global'}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'baseUrl',
-                  label: '接入点',
-                  span: 2,
-                  children: (
-                    <span className="font-mono text-xs">
-                      {currentAccount.baseUrl || '官方默认'}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'pat',
-                  label: 'PAT',
-                  children: (
-                    <span className="font-mono text-xs">
-                      {currentAccount.patFingerprint ? `····${currentAccount.patFingerprint}` : '—'}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'verify',
-                  label: '状态',
-                  children: (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span
-                        className={`inline-block h-1.5 w-1.5 rounded-full ${
-                          currentAccount.verifyStatus === 'verified'
-                            ? 'bg-emerald-500'
-                            : currentAccount.verifyStatus === 'failed'
-                              ? 'bg-red-500'
-                              : 'bg-gray-300'
-                        }`}
-                      />
-                      {currentAccount.verifyStatus === 'verified'
-                        ? '已验证'
-                        : currentAccount.verifyStatus === 'failed'
-                          ? '验证失败'
-                          : '未验证'}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'sched',
-                  label: '权重 / 并发',
-                  children: `${currentAccount.weight} / ${currentAccount.maxConcurrency}`,
-                },
-                ...(currentAccount.cooldownUntil &&
-                new Date(currentAccount.cooldownUntil) > new Date()
-                  ? [
-                      {
-                        key: 'cooldown',
-                        label: '冷却',
-                        children: (
-                          <span className="text-orange-500">
-                            至 {new Date(currentAccount.cooldownUntil).toLocaleTimeString()}
-                          </span>
-                        ),
-                      },
-                    ]
-                  : []),
-                ...(currentAccount.remark
-                  ? [
-                      {
-                        key: 'remark',
-                        label: '备注',
-                        span: 'full' as const,
-                        children: (
-                          <Tooltip title={currentAccount.remark}>
-                            <span className="block max-w-[520px] truncate">
-                              {currentAccount.remark}
-                            </span>
-                          </Tooltip>
-                        ),
-                      },
-                    ]
-                  : []),
-              ]}
-            />
-          </div>
-        )}
 
         <div className="mt-4 flex h-[calc(100vh-380px)] min-h-[320px] flex-col overflow-hidden rounded-xl border border-gray-100 bg-gradient-to-b from-[#f8f9fe] to-[#f4f6fb]">
           <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
