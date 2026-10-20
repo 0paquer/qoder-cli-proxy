@@ -182,8 +182,8 @@ test('warm pool: keepalive respawns lost idle processes within window', async ()
   pool.offer(key, SPEC());
   assert.equal(spawned, 1);
   child.emit('exit', 1, null); // 池内热进程意外死亡
-  assert.equal(pool.stats().idle, 0);
-
+  // 即时补位（removeEntry 钩子）当场接力，空窗只存在于同步调用栈内。
+  assert.equal(pool.stats().idle, 1, 'instant refill already refilled synchronously');
   await new Promise((r) => setTimeout(r, 120));
   assert.ok(spawned >= 2, 'keepalive must respawn the lost process');
   assert.equal(pool.stats().idle, 1, 'respawned process sits idle for next request');
@@ -210,9 +210,66 @@ test('warm pool: keepalive stops after window expires', async () => {
   const key = keyFor(SPEC());
   pool.offer(key, SPEC());
   const afterOffer = spawned;
-  child.emit('exit', 1, null); // 池内变空，若窗口失效这里会被补位
+  await new Promise((r) => setTimeout(r, 60)); // 超过窗口(20ms)，巡检(50ms)先清档
+  child.emit('exit', 1, null); // 池内变空，超窗指纹不得被即时补位复活
   assert.equal(pool.stats().idle, 0);
-  await new Promise((r) => setTimeout(r, 150));
+  await new Promise((r) => setTimeout(r, 120));
   assert.equal(spawned, afterOffer, 'expired fingerprint must not be respawned');
+  pool.shutdown();
+});
+
+test('warm pool: ttl reclaim refills instantly without waiting for keepalive tick', async () => {
+  let spawned = 0;
+  let first;
+  const pool = createWarmPool({
+    spawnFn: () => {
+      spawned += 1;
+      first = makeFakeChild();
+      return first;
+    },
+    size: 1,
+    maxTotal: 3,
+    ttl: 60_000,
+    readyMs: 0,
+    keepaliveMs: 60_000, // 巡检根本来不及跑：补位只能来自移除钩子
+    keepaliveWindowMs: 60_000,
+  });
+  const key = keyFor(SPEC());
+  pool.offer(key, SPEC());
+  assert.equal(spawned, 1);
+  first.kill(); // 池内归零（TTL 回收与进程早亡同走 removeEntry 钩子）
+  assert.equal(spawned, 2, 'refill must happen immediately from stored spec');
+  assert.equal(pool.stats().idle, 1, 'refilled process sits idle for next request');
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(spawned, 2, 'keepalive tick (60s) has not run yet');
+  pool.shutdown();
+});
+
+test('warm pool: instant refill cools down when respawned process dies at once', async () => {
+  let spawned = 0;
+  const children = [];
+  const pool = createWarmPool({
+    spawnFn: () => {
+      spawned += 1;
+      const c = makeFakeChild();
+      children.push(c);
+      return c;
+    },
+    size: 1,
+    maxTotal: 3,
+    ttl: 100,
+    readyMs: 0,
+    keepaliveMs: 60_000,
+    keepaliveWindowMs: 60_000,
+  });
+  const key = keyFor(SPEC());
+  pool.offer(key, SPEC());
+  await new Promise((r) => setTimeout(r, 250));
+  // @100ms TTL 回收 → 即时补位(spawned=2)；@200ms 补出的进程再回收，
+  // 命中 30s 冷却不得再补——否则进入无限重生风暴。
+  assert.equal(spawned, 2, 'ttl reclaim refilled once');
+  assert.equal(pool.stats().idle, 0, 'second reclaim is held by cooldown');
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(spawned, 2, 'cooldown must block a respawn storm');
   pool.shutdown();
 });

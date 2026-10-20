@@ -26,9 +26,11 @@ function isEnabled() {
   return !/^(0|false|off)$/i.test(process.env.QODER_DAEMON_POOL || '1');
 }
 
-/** 空闲回收时限：每次取用刷新，到点 stop。 */
+/** 空闲回收时限：每次取用刷新，到点 stop。默认 4 小时——与对话 warm-pool
+ *  的保温窗口对齐：闲置窗口内 daemon 常驻（模型/用量查询恒热），超窗才
+ *  释放内存。曾默认 10 分钟，闲置稍久的首次查询要重付约 7-15s 初始化。 */
 function ttlMs() {
-  return Math.max(10_000, Number(process.env.QODER_DAEMON_TTL_MS || 10 * 60_000));
+  return Math.max(10_000, Number(process.env.QODER_DAEMON_TTL_MS || 4 * 60 * 60_000));
 }
 
 /** key = 账号凭据 + 后端 + baseUrl（env/bundle 均由其派生）。 */

@@ -117,6 +117,8 @@ function createWarmPool({
   // key -> { spec, lastSeen }：保温巡检的已知指纹表。offer/acquire（每次
   // 请求都会走到）刷新 lastSeen，超过保温窗口后由巡检清理。
   const specs = new Map();
+  // key -> 上次即时补位时间（30s 冷却，防「补出的进程立刻又死」的风暴）。
+  const instantRefill = new Map();
   let stopped = false;
 
   function logInfo(msg, meta) {
@@ -150,7 +152,11 @@ function createWarmPool({
     if (!list) return;
     const idx = list.indexOf(entry);
     if (idx !== -1) list.splice(idx, 1);
-    if (list.length === 0) idle.delete(key);
+    if (list.length === 0) {
+      idle.delete(key);
+      // 池内归零（TTL 回收/进程早亡）：立即补位，不等下一轮巡检。
+      ensureWarmed(key);
+    }
     discard(entry);
   }
 
@@ -236,6 +242,24 @@ function createWarmPool({
     }
   }
 
+  /** 池内归零后的即时补位：用已存 spec 立刻重建，不等下一轮巡检（回冷
+   *  空档从「巡检间隔 + 成熟期」缩到仅成熟期）。30s 冷却防死亡风暴；
+   *  保温关闭或指纹超窗时不补。 */
+  function ensureWarmed(key) {
+    if (stopped || cfg.keepalive <= 0) return;
+    const tracked = specs.get(key);
+    if (!tracked) return;
+    if (Date.now() - tracked.lastSeen > cfg.keepaliveWindow) {
+      specs.delete(key);
+      instantRefill.delete(key);
+      return;
+    }
+    const last = instantRefill.get(key) || 0;
+    if (Date.now() - last < 30_000) return;
+    instantRefill.set(key, Date.now());
+    offerImpl(key, tracked.spec);
+  }
+
   // 空闲保温巡检：对窗口内的已知指纹，池内无热进程（TTL 回收/进程早亡）
   // 即补位。容量仍受 size/maxTotal 约束；unref 不阻塞进程退出。
   const keepaliveTimer =
@@ -246,6 +270,7 @@ function createWarmPool({
           for (const [key, tracked] of specs) {
             if (now - tracked.lastSeen > cfg.keepaliveWindow) {
               specs.delete(key);
+              instantRefill.delete(key);
               continue;
             }
             const list = idle.get(key);
@@ -307,6 +332,7 @@ function createWarmPool({
       stopped = true;
       if (keepaliveTimer) clearInterval(keepaliveTimer);
       specs.clear();
+      instantRefill.clear();
       for (const [key, list] of idle.entries()) {
         for (const entry of list) {
           try {
