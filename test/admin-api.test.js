@@ -412,6 +412,99 @@ test('playground: test-chat runs the CLI against a chosen account', async () => 
   }
 });
 
+test('prewarm-chat: unknown account 404, test env skips, cooldown and busy gates hold', async () => {
+  const app = createApp();
+  const { server, baseUrl } = await listen(app);
+  const originalRun = qoderCli.runQoderCnCli;
+  const originalStream = qoderCli.runQoderCnCliStream;
+  try {
+    const headers = await setupAdmin(app, baseUrl);
+    const acc = accountsStore.createAccount({ name: 'pw-acc', pat: 'pat-pw-1234' });
+    const accId = acc.account.id;
+
+    // Unknown account → 404.
+    const missing = await authedFetch(baseUrl, headers, '/admin/prewarm-chat', {
+      method: 'POST',
+      body: JSON.stringify({ accountId: 999999, model: 'auto', stream: true }),
+    });
+    assert.equal(missing.status, 404);
+
+    // Test environment never spawns a real probe.
+    const gated = await authedFetch(baseUrl, headers, '/admin/prewarm-chat', {
+      method: 'POST',
+      body: JSON.stringify({ accountId: accId, model: 'auto', stream: true }),
+    });
+    assert.equal(gated.status, 200);
+    const gatedBody = await gated.json();
+    assert.equal(gatedBody.ok, true);
+    assert.equal(gatedBody.skipped, 'test');
+
+    // Lift the test gate: cooldown / busy gates are now observable with a mock CLI.
+    delete process.env.QODER_PROXY_NO_USAGE_REFRESH;
+    const seen = [];
+    let releaseProbe;
+    qoderCli.runQoderCnCli = async (opts) => {
+      seen.push(opts);
+      // 挂起的 probe 让 busy 门保持关闭，便于断言。
+      await new Promise((resolve) => {
+        releaseProbe = resolve;
+      });
+      return 'warm';
+    };
+
+    const first = await (
+      await authedFetch(baseUrl, headers, '/admin/prewarm-chat', {
+        method: 'POST',
+        body: JSON.stringify({ accountId: accId, model: 'glm-5.3', stream: false }),
+      })
+    ).json();
+    assert.equal(first.ok, true);
+    assert.equal(first.queued, true);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].model, 'glm-5.3');
+    assert.equal(seen[0].token, 'pat-pw-1234');
+
+    // 同指纹 60s 冷却：重复调用不吃 token。
+    const cooled = await (
+      await authedFetch(baseUrl, headers, '/admin/prewarm-chat', {
+        method: 'POST',
+        body: JSON.stringify({ accountId: accId, model: 'glm-5.3', stream: false }),
+      })
+    ).json();
+    assert.equal(cooled.skipped, 'cooldown');
+    assert.equal(seen.length, 1);
+
+    // 单飞：probe 未结束时不同指纹也跳过（不登记冷却，结束后可重试）。
+    const busy = await (
+      await authedFetch(baseUrl, headers, '/admin/prewarm-chat', {
+        method: 'POST',
+        body: JSON.stringify({ accountId: accId, model: 'other-model', stream: false }),
+      })
+    ).json();
+    assert.equal(busy.skipped, 'busy');
+    assert.equal(seen.length, 1);
+
+    // 收尾：放行 probe，结束后 busy 解除。
+    releaseProbe();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const afterDone = await (
+      await authedFetch(baseUrl, headers, '/admin/prewarm-chat', {
+        method: 'POST',
+        body: JSON.stringify({ accountId: accId, model: 'other-model', stream: false }),
+      })
+    ).json();
+    assert.equal(afterDone.queued, true);
+    assert.equal(seen.length, 2);
+    releaseProbe();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally {
+    process.env.QODER_PROXY_NO_USAGE_REFRESH = '1';
+    qoderCli.runQoderCnCli = originalRun;
+    qoderCli.runQoderCnCliStream = originalStream;
+    server.close();
+  }
+});
+
 test('gateway: granted account PAT reaches the CLI and usage is recorded', async () => {
   const app = createApp();
   const { server, baseUrl } = await listen(app);

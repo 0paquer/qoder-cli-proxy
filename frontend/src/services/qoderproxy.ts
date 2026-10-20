@@ -407,6 +407,23 @@ export async function streamTestChat(
   return done;
 }
 
+/**
+ * 按需预热：切换模型/账号时后台补位该指纹的热进程（fire-and-forget）。
+ * 服务端有 60s 冷却与池满/进行中门控，重复调用无副作用；
+ * 失败静默（skipErrorHandler），绝不打扰用户操作。
+ */
+export async function prewarmChat(body: {
+  accountId: number;
+  model: string;
+  stream: boolean;
+}): Promise<{ ok: boolean; queued?: boolean; skipped?: string }> {
+  return request('/admin/prewarm-chat', {
+    method: 'POST',
+    data: body,
+    skipErrorHandler: true,
+  });
+}
+
 // ── 用户 ─────────────────────────────────────────────────────────────────────
 
 export async function listUsers(): Promise<{ ok: boolean; users: GatewayUser[] }> {

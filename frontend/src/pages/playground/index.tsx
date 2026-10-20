@@ -13,6 +13,7 @@ import { PageHeader, SectionCard } from '@/components/QpCard';
 import {
   listAccounts,
   listModels,
+  prewarmChat,
   streamTestChat,
   testChat,
   type Account,
@@ -151,6 +152,13 @@ const PlaygroundPage: React.FC = () => {
   const abortRef = useRef<AbortController | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // 按需预热：切换模型/账号即后台补位该指纹的热进程，随后的首条消息走热路径。
+  // fire-and-forget：服务端有冷却/池满门控，失败静默，绝不打扰操作。
+  const firePrewarm = (accId: number | undefined, mdl: string) => {
+    if (!accId) return;
+    prewarmChat({ accountId: accId, model: mdl, stream: mode === 'stream' }).catch(() => {});
+  };
 
   useEffect(() => {
     listAccounts()
@@ -360,7 +368,10 @@ const PlaygroundPage: React.FC = () => {
               className="w-full"
               placeholder="选择账号"
               value={accountId}
-              onChange={setAccountId}
+              onChange={(v) => {
+                setAccountId(v);
+                firePrewarm(v, model);
+              }}
               disabled={sending}
               options={accounts.map((a) => ({
                 value: a.id,
@@ -391,6 +402,7 @@ const PlaygroundPage: React.FC = () => {
               onChange={(v) => {
                 userPickedRef.current = true;
                 setModel(v);
+                firePrewarm(accountId, v);
               }}
               disabled={sending}
               loading={loadingModels}

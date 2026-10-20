@@ -532,6 +532,85 @@ function createAdminApi() {
     }
   });
 
+  // ── 按需预热（换模型/换账号）────────────────────────────────────────────────
+  // Playground 切换模型或账号时前端 fire-and-forget 调用：对指定
+  // （账号 × 模型 × 流式）指纹跑一次极小对话，probe 冷启动发生在后台，
+  // warm-pool 学习式补位留下热进程，用户随后发送的第一条消息即命中热路径。
+  // 门控顺序：账号校验 → 测试环境 → 预热开关 → 冷却 → 池满 → 进行中，
+  // 全部通过才登记冷却并启动 probe（被挡下的调用不吃冷却、不花 token）。
+  const prewarmRecent = new Map(); // `账号:流式:模型` -> 上次预热时间
+  const PREWARM_COOLDOWN_MS = 60_000;
+  let prewarmProbeRunning = false;
+
+  router.post('/prewarm-chat', adminGuard, (req, res) => {
+    const body = req.body || {};
+    const account = accountsStore.getAccount(Number(body.accountId));
+    if (!account) return notFound(res, 'Account not found');
+    // 测试环境禁止拉真进程（与用量刷新/启动预热共用门控）。
+    if (process.env.QODER_PROXY_NO_USAGE_REFRESH === '1') {
+      return res.json({ ok: true, skipped: 'test' });
+    }
+    if (
+      !warmPool.isEnabled() ||
+      /^(0|false|off)$/i.test(process.env.QODER_WARM_POOL_PREWARM || '1')
+    ) {
+      return res.json({ ok: true, skipped: 'disabled' });
+    }
+    const pat = accountsStore.getPat(account.id);
+    if (!pat) return fail(res, new AppError(400, 'invalid_request', 'Account has no PAT stored'));
+
+    const model = String(body.model || 'auto');
+    const stream = body.stream === true;
+    const key = `${account.id}:${stream ? 'stream' : 'non-stream'}:${model}`;
+    const now = Date.now();
+    if (now - (prewarmRecent.get(key) || 0) < PREWARM_COOLDOWN_MS) {
+      return res.json({ ok: true, skipped: 'cooldown' });
+    }
+    // 池满：补位无名额，probe 冷启动完即弃 = 白花 token。
+    const poolStats = warmPool.defaultPool.stats();
+    if (poolStats.idle >= poolStats.maxTotal) {
+      return res.json({ ok: true, skipped: 'pool-full' });
+    }
+    if (prewarmProbeRunning) return res.json({ ok: true, skipped: 'busy' });
+
+    prewarmRecent.set(key, now);
+    prewarmProbeRunning = true;
+    const base = {
+      messages: [{ role: 'user', content: '只回复 OK' }],
+      model,
+      token: pat,
+      baseUrl: account.baseUrl || undefined,
+      backendType: account.backendType || 'cn',
+      timeoutMs: 60000,
+    };
+    const started = Date.now();
+    const run = stream
+      ? qoderCli.runQoderCnCliStream({ ...base, onDelta: () => {} })
+      : qoderCli.runQoderCnCli(base);
+    run
+      .then(() => {
+        console.log('[chat-prewarm] on-demand probe done', {
+          accountId: account.id,
+          model,
+          stream,
+          ms: Date.now() - started,
+        });
+      })
+      .catch((error) => {
+        console.log('[chat-prewarm] on-demand probe failed', {
+          accountId: account.id,
+          model,
+          stream,
+          ms: Date.now() - started,
+          message: error && error.message,
+        });
+      })
+      .finally(() => {
+        prewarmProbeRunning = false;
+      });
+    return res.json({ ok: true, queued: true });
+  });
+
   // ── Users ──────────────────────────────────────────────────────────────────
   router.get('/users', adminGuard, (_req, res) => {
     const users = usersStore.listUsers().map((user) => ({

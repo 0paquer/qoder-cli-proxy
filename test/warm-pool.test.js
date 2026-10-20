@@ -264,9 +264,13 @@ test('warm pool: instant refill cools down when respawned process dies at once',
   });
   const key = keyFor(SPEC());
   pool.offer(key, SPEC());
-  await new Promise((r) => setTimeout(r, 250));
   // @100ms TTL 回收 → 即时补位(spawned=2)；@200ms 补出的进程再回收，
   // 命中 30s 冷却不得再补——否则进入无限重生风暴。
+  // 轮询而非固定 sleep：机器高负载下定时器漂移会让固定等待先于第二次回收触发。
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && !(spawned === 2 && pool.stats().idle === 0)) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
   assert.equal(spawned, 2, 'ttl reclaim refilled once');
   assert.equal(pool.stats().idle, 0, 'second reclaim is held by cooldown');
   await new Promise((r) => setTimeout(r, 120));
