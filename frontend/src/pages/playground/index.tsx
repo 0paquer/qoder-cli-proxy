@@ -76,18 +76,27 @@ const verifyTag = (s: Account['verifyStatus']) => {
   return <Tag>未验证</Tag>;
 };
 
-/** 模型下拉标签：附 credit 倍率（原始字段 displayName/priceFactor/isFree）。 */
-const modelLabel = (m: {
+/** 模型下拉富标签：displayName 主行 + 描述/内部代号副行，右侧 credit 倍率（参考官方选择器）。 */
+const modelOptionLabel = (m: {
   value: string;
   displayName?: string;
+  description?: string;
   priceFactor?: number | null;
   isFree?: boolean;
 }) => {
   const name = m.displayName || m.value;
   const rate = m.priceFactor ?? null;
-  if (m.isFree) return `${name}（免费 · ${rate ?? '?'}x）`;
-  if (rate != null) return `${name}（${rate}x）`;
-  return name;
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-medium">{name}</div>
+        <div className="truncate text-xs text-gray-400">{m.description || m.value}</div>
+      </div>
+      <span className="shrink-0 text-xs text-gray-400">
+        {m.isFree ? '免费' : rate != null ? `${rate}x` : ''}
+      </span>
+    </div>
+  );
 };
 
 /** 默认选中：优先免费模型，其次 credit 倍率最低者；无倍率数据取第一个。 */
@@ -365,8 +374,16 @@ const PlaygroundPage: React.FC = () => {
               disabled={sending}
               loading={loadingModels}
               showSearch
-              optionFilterProp="label"
-              options={models.map((m) => ({ value: m.value, label: modelLabel(m) }))}
+              filterOption={(input, option) =>
+                String((option as { searchText?: string })?.searchText ?? '').includes(
+                  input.toLowerCase(),
+                )
+              }
+              options={models.map((m) => ({
+                value: m.value,
+                label: modelOptionLabel(m),
+                searchText: `${m.displayName ?? ''} ${m.value}`.toLowerCase(),
+              }))}
             />
           </div>
         </div>

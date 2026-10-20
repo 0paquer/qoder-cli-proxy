@@ -19,14 +19,21 @@ interface ModelOption {
   name: string;
   rate?: number | null;
   isFree?: boolean;
+  description?: string;
 }
 
-/** 模型下拉标签：附 credit 倍率（rate=null 表示目录无数据，不显示）。 */
-const modelLabel = (m: ModelOption) => {
-  if (m.isFree) return `${m.name}（免费 · ${m.rate ?? '?'}x）`;
-  if (m.rate != null) return `${m.name}（${m.rate}x）`;
-  return m.name;
-};
+/** 模型下拉富标签：displayName 主行 + 描述/内部代号副行，右侧 credit 倍率（参考官方选择器）。 */
+const modelOptionLabel = (m: ModelOption) => (
+  <div className="flex items-center justify-between gap-3">
+    <div className="min-w-0">
+      <div className="truncate text-sm font-medium">{m.name}</div>
+      <div className="truncate text-xs text-gray-400">{m.description || m.id}</div>
+    </div>
+    <span className="shrink-0 text-xs text-gray-400">
+      {m.isFree ? '免费' : m.rate != null ? `${m.rate}x` : ''}
+    </span>
+  </div>
+);
 
 /** 默认选中：优先免费模型，其次 credit 倍率最低者；无倍率数据取第一个。 */
 const pickDefaultModel = (list: ModelOption[]) => {
@@ -95,6 +102,7 @@ const ApiTestPage: React.FC = () => {
                 ? m.rate
                 : null,
           isFree: Boolean(m.isFree),
+          description: typeof m.description === 'string' ? m.description : '',
         }));
         if (!list.length) {
           setModelsNote('该密钥暂无可用模型（检查账号授权与验证状态）');
@@ -256,12 +264,22 @@ const ApiTestPage: React.FC = () => {
               <Select
                 className="w-full"
                 value={model}
+                showSearch
+                filterOption={(input, option) =>
+                  String((option as { searchText?: string })?.searchText ?? '').includes(
+                    input.toLowerCase(),
+                  )
+                }
                 onChange={(v) => {
                   userPickedRef.current = true;
                   setModel(v);
                 }}
-                options={(models.length ? models : [{ id: 'qoder-cn', name: 'qoder-cn' }]).map(
-                  (m) => ({ value: m.id, label: modelLabel(m) }),
+                options={(models.length ? models : [{ id: 'qoder-cn', name: 'qoder-cn' } as ModelOption]).map(
+                  (m) => ({
+                    value: m.id,
+                    label: modelOptionLabel(m),
+                    searchText: `${m.name} ${m.id}`.toLowerCase(),
+                  }),
                 )}
               />
               {modelsNote ? (

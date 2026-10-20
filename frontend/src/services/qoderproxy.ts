@@ -294,6 +294,7 @@ export interface ChatTurn {
 export interface RawModelInfo {
   value: string;
   displayName?: string;
+  description?: string;
   priceFactor?: number | null;
   isFree?: boolean;
   isReasoning?: boolean;
