@@ -297,21 +297,21 @@ x-api-key: <key>
 
 ### 响应示例
 
-**模型列表** `GET /v1/models`（外壳为标准 OpenAI 格式；条目完整透传 CLI 模型目录的原始 ModelInfo 字段（`value`/`displayName`/`priceFactor`/`isFree` 等），仅叠加 `id`/`object`/`created`/`owned_by` 标准四字段）。`id` 优先取 `displayName`（第三方客户端只显示 `id`，由此透出真实模型名），`value` 保留 CLI 内部代号原样；对话请求的 `model` 传 `displayName` 时网关会自动反查回 `value` 再调 CLI，传 `value` 亦兼容：
+**模型列表** `GET /v1/models`（外壳为标准 OpenAI 格式；条目完整透传 CLI 模型目录的原始 ModelInfo 字段（`priceFactor`/`isFree` 等），仅叠加 `id`/`object`/`created`/`owned_by` 标准四字段）。字段语义：`id` = CLI 内部代号（OpenAI 标准，客户端直接发送即可调用），`value`/`displayName` = 模型正式名称（部分客户端按 `value` 显示）；对话请求的 `model` 传正式名称时网关会自动反查回内部代号再调 CLI，传内部代号亦兼容：
 
 ```json
 {
   "object": "list",
   "data": [
     {
-      "value": "Qmodel_38max",
+      "value": "Qwen3.8-Max",
       "displayName": "Qwen3.8-Max",
       "priceFactor": 1.0,
       "isFree": false,
       "isReasoning": true,
       "isDefault": false,
       "isEnabled": true,
-      "id": "Qwen3.8-Max",
+      "id": "Qmodel_38max",
       "object": "model",
       "created": 0,
       "owned_by": "qodercn"

@@ -1065,14 +1065,17 @@ function createApp() {
           if (item.status !== 'fulfilled' || !Array.isArray(item.value)) continue;
           for (const m of item.value) {
             if (!m || typeof m !== 'object') continue;
-            // id 优先用 displayName：第三方客户端只显示 id，真实名称由此透出
+            // id = CLI 内部代号（OpenAI 标准，客户端直接发送即可调用）；
+            // value/displayName = 正式名称（部分客户端按 value 显示）。
+            // 对话传正式名称时按目录反查回内部代号再调 CLI。
             const displayName = String(m.displayName ?? '').trim();
-            const id = displayName || String(m.id ?? m.value ?? '').trim();
-            if (!id || seen.has(id)) continue;
-            seen.add(id);
+            const code = String(m.value ?? m.id ?? '').trim();
+            if (!code || seen.has(code)) continue;
+            seen.add(code);
             data.push({
               ...(m.raw && typeof m.raw === 'object' ? m.raw : {}),
-              id,
+              value: displayName || code,
+              id: code,
               object: 'model',
               created: 0,
               owned_by: 'qodercn',
