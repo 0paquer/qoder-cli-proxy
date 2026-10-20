@@ -1026,9 +1026,9 @@ function createApp() {
   };
 
   /**
-   * 模型名解析：/v1/models 的 id 用 displayName（第三方客户端只显示 id，
-   * 不能暴露 Qmodel_* 内部代号），客户端回传时按账号目录反查回 CLI 的 value。
-   * 直接传 value 的旧调用方式不受影响（不命中 displayName 即原样返回）。
+   * 模型名解析：/v1/models 的 id 保留 CLI 内部代号（OpenAI 标准客户端
+   * 直发即可调用），value/displayName 填正式名称。客户端回传正式名称时
+   * 按账号目录反查回内部代号再调 CLI；直接传内部代号亦兼容（原样返回）。
    */
   async function resolveModelForAccount(account, requested) {
     const name = String(requested || '').trim();
@@ -1038,10 +1038,10 @@ function createApp() {
       if (!Array.isArray(models)) return requested;
       const hit = models.find((m) => {
         if (!m || typeof m !== 'object') return false;
-        return String(m.displayName ?? '').trim() === name;
+        return String(m.name ?? '').trim() === name;
       });
       if (hit) {
-        const value = String(hit.value ?? '').trim();
+        const value = String(hit.id ?? '').trim();
         if (value) return value;
       }
     } catch (_) {
@@ -1065,16 +1065,17 @@ function createApp() {
           if (item.status !== 'fulfilled' || !Array.isArray(item.value)) continue;
           for (const m of item.value) {
             if (!m || typeof m !== 'object') continue;
-            // id = CLI 内部代号（OpenAI 标准，客户端直接发送即可调用）；
-            // value/displayName = 正式名称（部分客户端按 value 显示）。
-            // 对话传正式名称时按目录反查回内部代号再调 CLI。
-            const displayName = String(m.displayName ?? '').trim();
-            const code = String(m.value ?? m.id ?? '').trim();
+            // 归一化条目仅有 id（内部代号）/ name（正式名称）/ raw（原始
+            // ModelInfo）：id 保留内部代号供 OpenAI 标准客户端直发调用，
+            // value/displayName 统一填正式名称（部分客户端按 value 显示）。
+            const code = String(m.id ?? '').trim();
+            const official = String(m.name ?? '').trim();
             if (!code || seen.has(code)) continue;
             seen.add(code);
             data.push({
               ...(m.raw && typeof m.raw === 'object' ? m.raw : {}),
-              value: displayName || code,
+              value: official || code,
+              displayName: official || code,
               id: code,
               object: 'model',
               created: 0,
