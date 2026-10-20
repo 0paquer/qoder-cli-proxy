@@ -76,27 +76,36 @@ const verifyTag = (s: Account['verifyStatus']) => {
   return <Tag>未验证</Tag>;
 };
 
-/** 模型下拉标签：附 credit 倍率（rate=null 表示目录无数据，不显示）。 */
-const modelLabel = (m: { name: string; rate?: number | null; isFree?: boolean }) => {
-  if (m.isFree) return `${m.name}（免费 · ${m.rate ?? '?'}x）`;
-  if (m.rate != null) return `${m.name}（${m.rate}x）`;
-  return m.name;
+/** 模型下拉标签：附 credit 倍率（原始字段 displayName/priceFactor/isFree）。 */
+const modelLabel = (m: {
+  value: string;
+  displayName?: string;
+  priceFactor?: number | null;
+  isFree?: boolean;
+}) => {
+  const name = m.displayName || m.value;
+  const rate = m.priceFactor ?? null;
+  if (m.isFree) return `${name}（免费 · ${rate ?? '?'}x）`;
+  if (rate != null) return `${name}（${rate}x）`;
+  return name;
 };
 
 /** 默认选中：优先免费模型，其次 credit 倍率最低者；无倍率数据取第一个。 */
-const pickDefaultModel = (list: { id: string; rate?: number | null; isFree?: boolean }[]) => {
-  const rated = list.filter((m) => m.rate != null);
-  if (!rated.length) return list[0]?.id;
+const pickDefaultModel = (list: { value: string; priceFactor?: number | null; isFree?: boolean }[]) => {
+  const rated = list.filter((m) => m.priceFactor != null);
+  if (!rated.length) return list[0]?.value;
   const best = [...rated].sort((a, b) => {
     if (a.isFree !== b.isFree) return a.isFree ? -1 : 1;
-    return (a.rate ?? 0) - (b.rate ?? 0);
+    return (a.priceFactor ?? 0) - (b.priceFactor ?? 0);
   })[0];
-  return best.id;
+  return best.value;
 };
 
 const PlaygroundPage: React.FC = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [models, setModels] = useState<{ id: string; name: string; rate?: number | null; isFree?: boolean }[]>([]);
+  const [models, setModels] = useState<
+    { value: string; displayName?: string; priceFactor?: number | null; isFree?: boolean }[]
+  >([]);
   const [accountId, setAccountId] = useState<number | undefined>(undefined);
   const [model, setModel] = useState<string>('qoder-cn');
   const [turns, setTurns] = useState<ChatMsg[]>([]);
@@ -137,7 +146,7 @@ const PlaygroundPage: React.FC = () => {
         setModelsSource(r.source ?? 'static');
         // 默认选中低倍率模型（免费优先，省 credits）；用户手动选过则保留
         setModel((cur) =>
-          userPickedRef.current && r.models.some((m) => m.id === cur)
+          userPickedRef.current && r.models.some((m) => m.value === cur)
             ? cur
             : (pickDefaultModel(r.models) ?? cur),
         );
@@ -357,7 +366,7 @@ const PlaygroundPage: React.FC = () => {
               loading={loadingModels}
               showSearch
               optionFilterProp="label"
-              options={models.map((m) => ({ value: m.id, label: modelLabel(m) }))}
+              options={models.map((m) => ({ value: m.value, label: modelLabel(m) }))}
             />
           </div>
         </div>

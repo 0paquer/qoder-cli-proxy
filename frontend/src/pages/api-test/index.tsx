@@ -83,11 +83,18 @@ const ApiTestPage: React.FC = () => {
           setModelsNote(`加载失败：HTTP ${r.status} ${d?.error?.message ?? ''}`.trim());
           return;
         }
+        // /v1/models 条目为原始 ModelInfo 展开字段（value/displayName/priceFactor/
+        // isFree），静态兜底则是 id/name/rate/is_free——此处兼容两种取值
         const list: ModelOption[] = (d?.data ?? []).map((m: any) => ({
-          id: String(m.id),
-          name: String(m.name || m.id),
-          rate: typeof m.rate === 'number' ? m.rate : null,
-          isFree: Boolean(m.is_free),
+          id: String(m.value ?? m.id),
+          name: String(m.displayName ?? m.name ?? m.value ?? m.id),
+          rate:
+            typeof m.priceFactor === 'number'
+              ? m.priceFactor
+              : typeof m.rate === 'number'
+                ? m.rate
+                : null,
+          isFree: Boolean(m.isFree),
         }));
         if (!list.length) {
           setModelsNote('该密钥暂无可用模型（检查账号授权与验证状态）');

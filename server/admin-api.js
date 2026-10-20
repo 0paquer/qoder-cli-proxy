@@ -25,7 +25,7 @@ const usageStore = require('./stores/usage');
 const balancer = require('./balancer');
 const qoderCli = require('./qoder-engine');
 const { getLogs, clearLogs } = require('./logger');
-const { MODELS, normalizeModelEntry, buildRateIndex, attachRate } = require('./models');
+const { MODELS } = require('./models');
 
 const { db } = dbModule;
 
@@ -329,12 +329,10 @@ function createAdminApi() {
       const baseUrl = account.baseUrl || undefined;
       const backendType = account.backendType || 'cn';
       const catalog = await qoderCli.loadModelCatalog({ token: pat, baseUrl, backendType });
-      const rateIndex = buildRateIndex(catalog.models);
+      // 完整透传：条目直接展开 CLI 原始 ModelInfo（value/displayName/
+      // priceFactor/isFree/isReasoning/isDefault/isEnabled/...），不做包装。
       const models = (catalog.models || [])
-        .map((m) => {
-          const norm = normalizeModelEntry(m);
-          return norm ? attachRate({ id: norm.id, name: norm.name }, rateIndex) : null;
-        })
+        .map((m) => (m && typeof m === 'object' && m.raw ? { ...m.raw } : null))
         .filter(Boolean);
       const ok = models.length > 0;
       accountModelsCache.set(accountId, { at: Date.now(), ok, models });

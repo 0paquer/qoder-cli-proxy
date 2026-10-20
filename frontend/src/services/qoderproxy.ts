@@ -290,9 +290,21 @@ export interface ChatTurn {
   content: string;
 }
 
+/** 账号目录条目：CLI 原始 ModelInfo 原样透传（value/displayName/priceFactor/isFree/...）。 */
+export interface RawModelInfo {
+  value: string;
+  displayName?: string;
+  priceFactor?: number | null;
+  isFree?: boolean;
+  isReasoning?: boolean;
+  isDefault?: boolean;
+  isEnabled?: boolean;
+  [key: string]: unknown;
+}
+
 export async function listModels(
   accountId?: number
-): Promise<{ ok: boolean; source?: 'account' | 'static'; models: { id: string; name: string; rate?: number | null; isFree?: boolean }[] }> {
+): Promise<{ ok: boolean; source?: 'account' | 'static'; models: RawModelInfo[] }> {
   const qs = accountId ? `?accountId=${accountId}` : '';
   return check(await request(`/admin/models${qs}`, { method: 'GET' }));
 }
