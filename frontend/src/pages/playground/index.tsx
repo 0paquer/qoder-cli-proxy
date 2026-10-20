@@ -1,4 +1,12 @@
-import { ClearOutlined, SendOutlined } from '@ant-design/icons';
+import {
+  ApiOutlined,
+  ClearOutlined,
+  FieldTimeOutlined,
+  MessageOutlined,
+  RobotOutlined,
+  SendOutlined,
+  UserSwitchOutlined,
+} from '@ant-design/icons';
 import { Button, Collapse, Segmented, Select, Spin, Tag, Tooltip, message } from 'antd';
 import React, { useEffect, useRef, useState } from 'react';
 import { PageHeader, SectionCard } from '@/components/QpCard';
@@ -305,7 +313,10 @@ const PlaygroundPage: React.FC = () => {
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
-            <div className="mb-1 text-[13px] text-gray-500">Qoder 账号</div>
+            <div className="mb-1 flex items-center gap-1.5 text-[13px] font-medium text-gray-500">
+              <UserSwitchOutlined className="text-indigo-400" />
+              Qoder 账号
+            </div>
             <Select
               className="w-full"
               placeholder="选择账号"
@@ -326,10 +337,11 @@ const PlaygroundPage: React.FC = () => {
             />
           </div>
           <div>
-            <div className="mb-1 flex items-center gap-2 text-[13px] text-gray-500">
+            <div className="mb-1 flex items-center gap-1.5 text-[13px] font-medium text-gray-500">
+              <RobotOutlined className="text-indigo-400" />
               模型
               {modelsSource === 'static' && !loadingModels && (
-                <span className="text-[11px] text-gray-400">（静态表，真实列表获取失败）</span>
+                <span className="text-[11px] font-normal text-gray-400">（静态表，真实列表获取失败）</span>
               )}
             </div>
             <Select
@@ -350,35 +362,45 @@ const PlaygroundPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="mt-4 flex h-[calc(100vh-380px)] min-h-[320px] flex-col overflow-hidden rounded-[10px] border border-gray-100 bg-[#f7f8fc]">
-          <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        <div className="mt-4 flex h-[calc(100vh-380px)] min-h-[320px] flex-col overflow-hidden rounded-xl border border-gray-100 bg-gradient-to-b from-[#f8f9fe] to-[#f4f6fb]">
+          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
             {!turns.length && !sending && (
-              <div className="flex h-full items-center justify-center text-[13px] text-gray-400">
-                {currentAccount
-                  ? '输入消息开始测试，请求将直接使用所选账号的 PAT 调用 Qoder。'
-                  : '请先选择一个 Qoder 账号。'}
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-500 text-[22px] text-white shadow-[0_8px_20px_rgba(99,102,241,0.35)]">
+                  <MessageOutlined />
+                </div>
+                <div>
+                  <div className="text-[14px] font-medium text-gray-600">
+                    {currentAccount ? '开始一段测试对话' : '请先选择一个 Qoder 账号'}
+                  </div>
+                  <div className="mt-1 text-[12px] text-gray-400">
+                    {currentAccount
+                      ? '请求将直接使用所选账号的 PAT 调用 Qoder，不经过调度与配额'
+                      : '在上方选择账号后即可发送消息'}
+                  </div>
+                </div>
               </div>
             )}
             {turns.map((t) =>
               t.role === 'user' ? (
                 <div key={t.id} className="flex justify-end">
-                  <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-[10px] bg-gradient-to-r from-indigo-600 to-purple-600 px-3.5 py-2.5 text-[14px] text-white">
+                  <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-2.5 text-[14px] leading-relaxed text-white shadow-[0_2px_10px_rgba(79,70,229,0.28)]">
                     {t.content}
                   </div>
                 </div>
               ) : (
-                <div key={t.id} className="flex justify-start gap-2">
-                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 text-[12px] font-bold text-white">
+                <div key={t.id} className="flex justify-start gap-2.5">
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 text-[12px] font-bold text-white shadow-[0_2px_8px_rgba(79,70,229,0.25)]">
                     Q
                   </div>
-                  <div className="max-w-[75%]">
+                  <div className="max-w-[75%] min-w-0">
                     <ThinkingBlock
                       thinking={t.thinking}
                       streaming={t.id === streamingId}
                       hasContent={Boolean(t.content)}
                     />
                     {t.content && (
-                      <div className="whitespace-pre-wrap break-words rounded-[10px] border border-gray-100 bg-white px-3.5 py-2.5 text-[14px] text-gray-800">
+                      <div className="whitespace-pre-wrap break-words rounded-2xl rounded-tl-md border border-gray-100 bg-white px-4 py-2.5 text-[14px] leading-relaxed text-gray-800 shadow-[0_1px_4px_rgba(15,23,42,0.05)]">
                         {t.content}
                         {t.id === streamingId && (
                           <span className="ml-0.5 inline-block h-[14px] w-[2px] animate-pulse bg-indigo-500 align-middle" />
@@ -387,24 +409,38 @@ const PlaygroundPage: React.FC = () => {
                     )}
                     {t.meta?.error && (
                       <div
-                        className={`whitespace-pre-wrap break-words rounded-[10px] border border-red-200 bg-red-50 px-3.5 py-2.5 text-[14px] text-red-600 ${
+                        className={`flex items-start gap-2 whitespace-pre-wrap break-words rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-[14px] text-red-600 ${
                           t.content ? 'mt-2' : ''
                         }`}
                       >
-                        {t.meta.code ? <span className="font-mono">{t.meta.code}: </span> : null}
-                        {t.meta.error}
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-100 text-[11px] font-bold text-red-500">
+                          !
+                        </span>
+                        <span>
+                          {t.meta.code ? <span className="font-mono">{t.meta.code}: </span> : null}
+                          {t.meta.error}
+                        </span>
                       </div>
                     )}
                     {t.meta && !t.meta.error && (
-                      <div className="mt-1 text-[12px] text-gray-400">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         {t.id === streamingId ? (
-                          <span>生成中…</span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-500">
+                            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-400" />
+                            生成中
+                          </span>
                         ) : (
                           <>
-                            耗时 {((t.meta.durationMs ?? 0) / 1000).toFixed(1)}s
-                            {t.meta.usage
-                              ? ` · 输入 ${t.meta.usage.inputTokens} / 输出 ${t.meta.usage.outputTokens} tokens`
-                              : ''}
+                            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500">
+                              <FieldTimeOutlined />
+                              {((t.meta.durationMs ?? 0) / 1000).toFixed(1)}s
+                            </span>
+                            {t.meta.usage && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500">
+                                <ApiOutlined />
+                                输入 {t.meta.usage.inputTokens} / 输出 {t.meta.usage.outputTokens}
+                              </span>
+                            )}
                           </>
                         )}
                       </div>
@@ -415,17 +451,26 @@ const PlaygroundPage: React.FC = () => {
             )}
             {sending && turns[turns.length - 1]?.role === 'user' && (
               <div className="flex justify-start">
-                <div className="rounded-[10px] border border-gray-100 bg-white px-3.5 py-2.5 text-[14px] text-gray-400">
-                  正在请求 Qoder…
+                <div className="flex items-center gap-2 rounded-2xl rounded-tl-md border border-gray-100 bg-white px-4 py-2.5 text-[14px] text-gray-400 shadow-[0_1px_4px_rgba(15,23,42,0.05)]">
+                  正在请求 Qoder
+                  <span className="flex gap-1">
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-300"
+                        style={{ animationDelay: `${i * 0.15}s` }}
+                      />
+                    ))}
+                  </span>
                 </div>
               </div>
             )}
             <div ref={bottomRef} />
           </div>
-          <div className="border-t border-gray-100 bg-white p-3">
+          <div className="border-t border-gray-100 bg-white/90 p-3.5 backdrop-blur">
             <div className="flex items-end gap-2">
               <textarea
-                className="max-h-[120px] min-h-[40px] flex-1 resize-none rounded-[10px] border border-gray-200 bg-white px-3 py-2 text-[14px] text-gray-800 outline-none transition-shadow focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                className="max-h-[120px] min-h-[42px] flex-1 resize-none rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[14px] text-gray-800 outline-none transition-all focus:border-indigo-400 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
                 placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                 rows={1}
                 value={input}

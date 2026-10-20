@@ -1,4 +1,15 @@
-import { CodeOutlined, CopyOutlined, SendOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  CodeOutlined,
+  CopyOutlined,
+  DatabaseOutlined,
+  EditOutlined,
+  FieldTimeOutlined,
+  KeyOutlined,
+  RobotOutlined,
+  SendOutlined,
+} from '@ant-design/icons';
 import { Button, Input, Modal, Select, Tag, message } from 'antd';
 import React, { useEffect, useRef, useState } from 'react';
 import { PageHeader, SectionCard } from '@/components/QpCard';
@@ -202,7 +213,7 @@ const ApiTestPage: React.FC = () => {
           复制
         </Button>
       </div>
-      <pre className="max-h-72 overflow-auto rounded-[8px] bg-gray-50 p-4 font-mono text-[12px] leading-5 break-all whitespace-pre-wrap text-gray-800">
+      <pre className="max-h-72 overflow-auto rounded-lg border border-gray-100 bg-gray-50 p-4 font-mono text-[12px] leading-5 break-all whitespace-pre-wrap text-gray-800">
         {text}
       </pre>
     </div>
@@ -215,10 +226,13 @@ const ApiTestPage: React.FC = () => {
         description="使用 API 密钥走真实网关链路（鉴权 → 调度 → 配额）验证调用可用性"
       />
       <SectionCard title="测试请求" accent="#4f46e5">
-        <div className="rounded-[8px] bg-gray-50 p-4">
+        <div className="rounded-xl border border-gray-100 bg-[#f8f9fe] p-4">
           <div className="flex flex-wrap items-start gap-3">
             <div className="min-w-[280px] flex-1">
-              <div className="mb-1.5 text-xs font-medium text-gray-500">API 密钥</div>
+              <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500">
+                <KeyOutlined className="text-indigo-400" />
+                API 密钥
+              </div>
               <Input
                 placeholder="qk-..."
                 value={apiKey}
@@ -228,7 +242,10 @@ const ApiTestPage: React.FC = () => {
               />
             </div>
             <div className="w-64">
-              <div className="mb-1.5 text-xs font-medium text-gray-500">模型</div>
+              <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500">
+                <RobotOutlined className="text-indigo-400" />
+                模型
+              </div>
               <Select
                 className="w-full"
                 value={model}
@@ -246,7 +263,10 @@ const ApiTestPage: React.FC = () => {
             </div>
           </div>
           <div className="mt-3">
-            <div className="mb-1.5 text-xs font-medium text-gray-500">提示词</div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500">
+              <EditOutlined className="text-indigo-400" />
+              提示词
+            </div>
             <Input.TextArea
               rows={3}
               value={prompt}
@@ -291,24 +311,46 @@ const ApiTestPage: React.FC = () => {
         </div>
       </Modal>
 
-      {result && (
-        <div className="mt-5">
-          <SectionCard title="调用结果" accent={result.ok ? '#10b981' : '#ef4444'}>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              {result.ok ? (
-                <Tag color="success">成功 · HTTP {result.status}</Tag>
-              ) : (
-                <Tag color="error">失败{result.status ? ` · HTTP ${result.status}` : ' · 网络错误'}</Tag>
-              )}
-              <Tag>{(result.ms / 1000).toFixed(1)}s</Tag>
-              {result.usage ? <Tag color="geekblue">{result.usage}</Tag> : null}
+      <div className="mt-5">
+        <SectionCard
+          title="调用结果"
+          accent={result ? (result.ok ? '#10b981' : '#ef4444') : '#4f46e5'}
+        >
+          {result ? (
+            <>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {result.ok ? (
+                  <Tag icon={<CheckCircleOutlined />} color="success">
+                    成功 · HTTP {result.status}
+                  </Tag>
+                ) : (
+                  <Tag icon={<CloseCircleOutlined />} color="error">
+                    失败{result.status ? ` · HTTP ${result.status}` : ' · 网络错误'}
+                  </Tag>
+                )}
+                <Tag icon={<FieldTimeOutlined />}>{(result.ms / 1000).toFixed(1)}s</Tag>
+                {result.usage ? (
+                  <Tag icon={<DatabaseOutlined />} color="geekblue">
+                    {result.usage}
+                  </Tag>
+                ) : null}
+              </div>
+              <pre className="max-h-96 overflow-auto rounded-lg border border-gray-100 bg-gray-50 p-4 font-mono text-[12px] leading-5 whitespace-pre-wrap text-gray-800">
+                {result.text}
+              </pre>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2.5 py-10 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-500 text-[18px] text-white shadow-[0_8px_20px_rgba(99,102,241,0.35)]">
+                <CodeOutlined />
+              </div>
+              <div className="text-[13px] text-gray-400">
+                填写上方表单并发送后，这里会展示网关返回结果
+              </div>
             </div>
-            <pre className="max-h-96 overflow-auto rounded-[8px] bg-gray-50 p-4 font-mono text-[12px] leading-5 whitespace-pre-wrap text-gray-800">
-              {result.text}
-            </pre>
-          </SectionCard>
-        </div>
-      )}
+          )}
+        </SectionCard>
+      </div>
     </div>
   );
 };
