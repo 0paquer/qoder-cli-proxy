@@ -24,6 +24,7 @@ const usersStore = require('./stores/users');
 const usageStore = require('./stores/usage');
 const balancer = require('./balancer');
 const qoderCli = require('./qoder-engine');
+const warmPool = require('./warm-pool');
 const { getLogs, clearLogs } = require('./logger');
 const { MODELS } = require('./models');
 
@@ -264,6 +265,53 @@ function createAdminApi() {
     setTimeout(() => {
       refreshAllAccountUsage().catch(() => {});
     }, 3000).unref?.();
+
+    // ─── 对话进程启动预热 ────────────────────────────────────────
+    // warm-pool 是学习式的：首个对话请求必须自己冷启动（实测约 20s）。
+    // 这里启动后在后台把冷启动先跑掉：对每个启用账号各发一次极小对话——
+    // 流式与非流式各一次（CLI 带不带 --include-partial-messages 会分叉池
+    // 指纹，必须分别补位）——probe 自身冷启动发生在后台，同时 offer 出
+    // 成熟热进程，用户首个请求即可命中热路径。每次启动每账号约几十 token。
+    // QODER_WARM_POOL_PREWARM=0 关闭；与用量刷新共用测试门控。
+    async function prewarmChatPools() {
+      if (!warmPool.isEnabled()) return;
+      if (/^(0|false|off)$/i.test(process.env.QODER_WARM_POOL_PREWARM || '1')) return;
+      const accounts = accountsStore.listAccounts().filter((a) => a.enabled);
+      for (const account of accounts) {
+        const pat = accountsStore.getPat(account.id);
+        if (!pat) continue;
+        const base = {
+          messages: [{ role: 'user', content: '只回复 OK' }],
+          model: 'auto',
+          token: pat,
+          baseUrl: account.baseUrl || undefined,
+          backendType: account.backendType || 'cn',
+          timeoutMs: 60000,
+        };
+        const variants = [
+          ['non-stream', () => qoderCli.runQoderCnCli(base)],
+          ['stream', () => qoderCli.runQoderCnCliStream({ ...base, onDelta: () => {} })],
+        ];
+        for (const [label, run] of variants) {
+          const started = Date.now();
+          try {
+            await run();
+            console.log('[chat-prewarm] probe done', { accountId: account.id, label, ms: Date.now() - started });
+          } catch (error) {
+            console.log('[chat-prewarm] probe failed', {
+              accountId: account.id,
+              label,
+              ms: Date.now() - started,
+              message: error && error.message,
+            });
+          }
+        }
+      }
+    }
+    // 晚于用量刷新启动，避免与 daemon 初始化抢跑；unref 不阻塞退出。
+    setTimeout(() => {
+      prewarmChatPools().catch(() => {});
+    }, 8000).unref?.();
   }
 
   router.post('/accounts/:id/usage', adminGuard, async (req, res) => {

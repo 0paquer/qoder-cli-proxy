@@ -15,6 +15,12 @@
  *
  * 预热是学习式的：首次请求仍冷启动，钩子在冷启动的同时为相同指纹
  * （账号 + 命令行参数 + 环境）补一个热进程，后续同指纹请求直接取用。
+ *
+ * 空闲保温（keepalive）：学习式补位只在「请求发生时」触发，指纹超过 TTL
+ * 无请求就会回冷。保温巡检按间隔扫描已知指纹，发现池内无热进程即补位，
+ * 让「短暂闲置后的首个请求」依然是热路径；距最后请求超过保温窗口的指纹
+ * 停止补位（账号停用/长期闲置时释放内存）。启动预热见 admin-api.js
+ * 的 prewarmChatPools（解决「服务启动后的首个请求」）。
  */
 
 const crypto = require('crypto');
@@ -48,6 +54,16 @@ function isEnabled() {
   return !/^(0|false|off)$/i.test(process.env.QODER_WARM_POOL || '1');
 }
 
+/** 保温巡检间隔（毫秒）：发现某指纹池内无热进程即补位。0 关闭。 */
+function keepaliveMs() {
+  return Math.max(0, Number(process.env.QODER_WARM_POOL_KEEPALIVE_MS || 60_000));
+}
+
+/** 保温窗口（毫秒）：距最后一次请求超过该时长的指纹停止保温。默认 4 小时。 */
+function keepaliveWindowMs() {
+  return Math.max(0, Number(process.env.QODER_WARM_POOL_KEEPALIVE_WINDOW_MS || 4 * 60 * 60_000));
+}
+
 /** env 中影响 CLI 行为的稳定部分（排除每请求变化的 auth payload 路径）。 */
 function stableEnvPart(env) {
   const pairs = Object.entries(env || {})
@@ -71,7 +87,16 @@ function keyFor({ command, args, env, token }) {
     .slice(0, 24);
 }
 
-function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLimit, spawnFn, log } = {}) {
+function createWarmPool({
+  size,
+  maxTotal: maxTotalLimit,
+  ttl,
+  readyMs: readyMsLimit,
+  keepaliveMs: keepaliveOpt,
+  keepaliveWindowMs: keepaliveWindowOpt,
+  spawnFn,
+  log,
+} = {}) {
   const cfg = {
     size: Math.max(0, Number(size != null ? size : poolSize())),
     maxTotal: Math.max(0, Number(maxTotalLimit != null ? maxTotalLimit : maxTotal())),
@@ -79,6 +104,9 @@ function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLi
     ttl: Math.max(50, Number(ttl != null ? ttl : ttlMs())),
     // 注入路径允许 0（测试即时取用）；环境变量路径无下限需求。
     readyMs: Math.max(0, Number(readyMsLimit != null ? readyMsLimit : readyMs())),
+    // 默认关闭，仅 defaultPool 按环境变量显式开启（测试注入路径保持确定性）。
+    keepalive: Math.max(0, Number(keepaliveOpt != null ? keepaliveOpt : 0)),
+    keepaliveWindow: Math.max(0, Number(keepaliveWindowOpt != null ? keepaliveWindowOpt : keepaliveWindowMs())),
   };
   const doSpawn =
     spawnFn ||
@@ -86,6 +114,9 @@ function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLi
 
   // key -> [entry]
   const idle = new Map();
+  // key -> { spec, lastSeen }：保温巡检的已知指纹表。offer/acquire（每次
+  // 请求都会走到）刷新 lastSeen，超过保温窗口后由巡检清理。
+  const specs = new Map();
   let stopped = false;
 
   function logInfo(msg, meta) {
@@ -185,10 +216,51 @@ function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLi
     return entry;
   }
 
+  /** 补位实现（学习式请求路径与保温巡检共用）；不刷新 lastSeen。 */
+  function offerImpl(key, spec) {
+    if (stopped || !spec || !spec.token) return;
+    const list = idle.get(key) || [];
+    if (list.length >= cfg.size) return;
+    if (totalIdle() >= cfg.maxTotal) return;
+    // offer 同步执行（spawnEntry 不是异步的），无需并发闸门；
+    // 上限由上面的 size / maxTotal 两个池容量条件控制。
+    try {
+      const entry = spawnEntry(key, spec);
+      list.push(entry);
+      idle.set(key, list);
+      logInfo('warm pool process prewarmed', { key, total: totalIdle() });
+    } catch (err) {
+      // 补位失败只记日志不冒泡：offer 在热路径 acquire 成功后被调用，
+      // 抛错会让请求失败且刚取走（taken）的进程无人管理成为孤儿
+      logInfo('warm pool refill failed', { key, message: err && err.message });
+    }
+  }
+
+  // 空闲保温巡检：对窗口内的已知指纹，池内无热进程（TTL 回收/进程早亡）
+  // 即补位。容量仍受 size/maxTotal 约束；unref 不阻塞进程退出。
+  const keepaliveTimer =
+    cfg.keepalive > 0
+      ? setInterval(() => {
+          if (stopped || !isEnabled()) return;
+          const now = Date.now();
+          for (const [key, tracked] of specs) {
+            if (now - tracked.lastSeen > cfg.keepaliveWindow) {
+              specs.delete(key);
+              continue;
+            }
+            const list = idle.get(key);
+            if (!list || list.length === 0) offerImpl(key, tracked.spec);
+          }
+        }, cfg.keepalive)
+      : null;
+  keepaliveTimer?.unref?.();
+
   return {
     /** 取走一个成热的热进程（child-like 对象）；无可发放进程返回 null。不自动补位。 */
     acquire(key) {
       if (stopped) return null;
+      const tracked = specs.get(key);
+      if (tracked) tracked.lastSeen = Date.now();
       const list = idle.get(key);
       if (!list || list.length === 0) return null;
       const now = Date.now();
@@ -209,24 +281,11 @@ function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLi
       return null;
     },
 
-    /** 学习式补位：为该指纹异步预热一个进程（受池大小与并发限制）。 */
+    /** 学习式补位：为该指纹预热一个进程（受池大小与并发限制），并登记保温。 */
     offer(key, spec) {
       if (stopped || !spec || !spec.token) return;
-      const list = idle.get(key) || [];
-      if (list.length >= cfg.size) return;
-      if (totalIdle() >= cfg.maxTotal) return;
-      // offer 同步执行（spawnEntry 不是异步的），无需并发闸门；
-      // 上限由上面的 size / maxTotal 两个池容量条件控制。
-      try {
-        const entry = spawnEntry(key, spec);
-        list.push(entry);
-        idle.set(key, list);
-        logInfo('warm pool process prewarmed', { key, total: totalIdle() });
-      } catch (err) {
-        // 补位失败只记日志不冒泡：offer 在热路径 acquire 成功后被调用，
-        // 抛错会让请求失败且刚取走（taken）的进程无人管理成为孤儿
-        logInfo('warm pool refill failed', { key, message: err && err.message });
-      }
+      specs.set(key, { spec, lastSeen: Date.now() });
+      offerImpl(key, spec);
     },
 
     stats() {
@@ -238,11 +297,16 @@ function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLi
         maxTotal: cfg.maxTotal,
         ttlMs: cfg.ttl,
         readyMs: cfg.readyMs,
+        keepaliveMs: cfg.keepalive,
+        keepaliveWindowMs: cfg.keepaliveWindow,
+        trackedSpecs: specs.size,
       };
     },
 
     shutdown() {
       stopped = true;
+      if (keepaliveTimer) clearInterval(keepaliveTimer);
+      specs.clear();
       for (const [key, list] of idle.entries()) {
         for (const entry of list) {
           try {
@@ -259,6 +323,9 @@ function createWarmPool({ size, maxTotal: maxTotalLimit, ttl, readyMs: readyMsLi
 }
 
 const defaultPool = createWarmPool({
+  // 空闲保温仅默认池开启（测试注入路径默认关闭，保持确定性）。
+  keepaliveMs: keepaliveMs(),
+  keepaliveWindowMs: keepaliveWindowMs(),
   log: (msg, meta) => {
     try {
       console.log(`[warm-pool] ${msg}`, meta || '');

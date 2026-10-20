@@ -161,3 +161,58 @@ test('warm pool: enabled by default, disabled via QODER_WARM_POOL', () => {
     delete process.env.QODER_WARM_POOL;
   }
 });
+
+test('warm pool: keepalive respawns lost idle processes within window', async () => {
+  let spawned = 0;
+  let child;
+  const pool = createWarmPool({
+    spawnFn: () => {
+      spawned += 1;
+      child = makeFakeChild();
+      return child;
+    },
+    size: 1,
+    maxTotal: 3,
+    ttl: 60_000,
+    readyMs: 0,
+    keepaliveMs: 40,
+    keepaliveWindowMs: 60_000,
+  });
+  const key = keyFor(SPEC());
+  pool.offer(key, SPEC());
+  assert.equal(spawned, 1);
+  child.emit('exit', 1, null); // 池内热进程意外死亡
+  assert.equal(pool.stats().idle, 0);
+
+  await new Promise((r) => setTimeout(r, 120));
+  assert.ok(spawned >= 2, 'keepalive must respawn the lost process');
+  assert.equal(pool.stats().idle, 1, 'respawned process sits idle for next request');
+  pool.shutdown();
+  assert.equal(pool.stats().idle, 0);
+});
+
+test('warm pool: keepalive stops after window expires', async () => {
+  let spawned = 0;
+  let child;
+  const pool = createWarmPool({
+    spawnFn: () => {
+      spawned += 1;
+      child = makeFakeChild();
+      return child;
+    },
+    size: 1,
+    maxTotal: 3,
+    ttl: 60_000,
+    readyMs: 0,
+    keepaliveMs: 50,
+    keepaliveWindowMs: 20, // 窗口短于首个巡检点：首轮即过期
+  });
+  const key = keyFor(SPEC());
+  pool.offer(key, SPEC());
+  const afterOffer = spawned;
+  child.emit('exit', 1, null); // 池内变空，若窗口失效这里会被补位
+  assert.equal(pool.stats().idle, 0);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(spawned, afterOffer, 'expired fingerprint must not be respawned');
+  pool.shutdown();
+});
