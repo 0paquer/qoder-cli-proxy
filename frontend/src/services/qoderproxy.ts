@@ -596,10 +596,6 @@ export async function clearLogs(): Promise<{ ok: boolean }> {
   return check(await request('/admin/logs', { method: 'DELETE' }));
 }
 
-export async function setProxyApiKey(key: string): Promise<{ ok: boolean }> {
-  return check(await request('/admin/set-proxy-api-key', { method: 'POST', data: { key } }));
-}
-
 export async function restartServer(body: {
   port?: string;
   bindHost?: string;

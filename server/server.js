@@ -2,13 +2,11 @@
 require('./logger');
 
 // ── .env bootstrap ───────────────────────────────────────────────────────────
-// 1) .env 不存在：以 .env.example 为模板创建，并自动生成随机 PROXY_API_KEY。
-//    固定默认密钥是安全反模式（所有部署密钥相同等于裸奔），因此每部署随机；
-//    之后可在 .env 或管理台「系统设置」中修改，下次启动生效。
+// 1) .env 不存在：以 .env.example 为模板创建（不写任何密钥——网关访问凭据
+//    统一在管理台「用户密钥」中按用户签发）。
 // 2) 加载 .env 到 process.env（不覆盖外部已显式注入的变量，如服务/容器环境）。
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const envPath = path.join(__dirname, '..', '.env');
 
 function loadEnvFile() {
@@ -32,29 +30,21 @@ function loadEnvFile() {
 }
 
 function ensureDefaultEnv() {
-  if (fs.existsSync(envPath)) return null;
+  if (fs.existsSync(envPath)) return false;
   const examplePath = path.join(__dirname, '..', '.env.example');
-  let content = fs.existsSync(examplePath)
+  const content = fs.existsSync(examplePath)
     ? fs.readFileSync(examplePath, 'utf-8')
     : '# Qoder CLI Proxy configuration\n';
-  const key = 'qp-' + crypto.randomBytes(24).toString('hex');
-  if (/^PROXY_API_KEY=.*$/m.test(content)) {
-    content = content.replace(/^PROXY_API_KEY=.*$/m, `PROXY_API_KEY=${key}`);
-  } else {
-    content = content.replace(/\s*$/, '\n')
-      + '# Gateway key (auto-generated; edit here or in the admin console System Settings)\n'
-      + `PROXY_API_KEY=${key}\n`;
-  }
   fs.writeFileSync(envPath, content, 'utf-8');
-  return key;
+  return true;
 }
 
-const generatedGatewayKey = ensureDefaultEnv();
+const createdEnv = ensureDefaultEnv();
 loadEnvFile();
-if (generatedGatewayKey) {
+if (createdEnv) {
   console.log(
-    '[env] .env not found — created from template with a randomly generated PROXY_API_KEY. ' +
-      'Edit .env (or admin console → System Settings) to change it; takes effect on next start.'
+    '[env] .env not found — created from template. ' +
+      'Issue gateway API keys in the admin console (Users & Keys); edit .env for other settings.'
   );
 }
 
@@ -132,7 +122,7 @@ function startServer(attempt = 0) {
       home: backend.homeDir,
     });
     log('security', {
-      proxy_api_key: isProxyAuthEnabled() ? 'enabled' : 'not set',
+      api_keys: isProxyAuthEnabled() ? 'issued' : 'none',
       cross_origin: 'loopback origins only',
       server_tool_execution: /^(1|true|yes)$/i.test(process.env.SERVER_TOOL_EXECUTION || '')
         ? 'ENABLED'
@@ -140,8 +130,8 @@ function startServer(attempt = 0) {
     });
     if (!isProxyAuthEnabled()) {
       log(
-        'note: PROXY_API_KEY is not set, so any process on this machine can use the proxy. ' +
-          'Set it in .env to require a key.'
+        'note: no API key issued yet, so any process on this machine can use the proxy. ' +
+          'Issue a key in the admin console (Users & Keys) to require credentials.'
       );
     }
     // The Host/Origin checks in localOnlyGuard only defend the loopback-by-default
@@ -152,24 +142,23 @@ function startServer(attempt = 0) {
       log('WARNING: BIND_HOST is non-loopback. Host and Origin checks are OPEN to any value —', {
         bind_host: HOST,
         recommendation:
-          'Set ALLOWED_HOSTS and ALLOWED_ORIGINS explicitly, keep PROXY_API_KEY configured, ' +
+          'Set ALLOWED_HOSTS and ALLOWED_ORIGINS explicitly, issue gateway API keys, ' +
           'and never expose the admin console to untrusted networks.',
       });
     }
     if (isProxyAuthEnabled() && !loopback && String(process.env.ALLOWED_HOSTS || '').trim() === '') {
       log('WARNING: ALLOWED_HOSTS is empty on a non-loopback bind. DNS-rebinding protection is off.');
     }
-    // 曾启用过 API Key 凭据设施、但当前零有效 key 且未设 PROXY_API_KEY：
-    // 网关已回落到开放模式（与 auth.js gatewayGuard 的开放判定同条件），必须显式告警
+    // 曾启用过 API Key 凭据设施、但当前零有效 key：网关已回落到开放模式
+    // （与 auth.js gatewayGuard 的开放判定同条件），必须显式告警
     try {
       const { db } = require('./db');
       const total = db.prepare('SELECT COUNT(*) AS n FROM api_key').get().n;
       const active = db.prepare('SELECT COUNT(*) AS n FROM api_key WHERE revoked_at IS NULL').get().n;
-      if (total > 0 && active === 0 && !isProxyAuthEnabled()) {
+      if (total > 0 && active === 0) {
         log(
-          'WARNING: all API keys are revoked/absent and PROXY_API_KEY is not set — ' +
-            'the /v1 gateway is OPEN to any process on this machine. ' +
-            'Create a new key or set PROXY_API_KEY to close it.'
+          'WARNING: all API keys are revoked — the /v1 gateway is OPEN to any process ' +
+            'on this machine. Issue a new key in the admin console to close it.'
         );
       }
     } catch {

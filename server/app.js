@@ -5,7 +5,6 @@ const cors = require('cors');
 const { anthropicError, openAiError, AppError } = require('./errors');
 const {
   adminGuard,
-  apiKeyGuard,
   gatewayGuard,
   quotaGuard,
   accountsForPrincipal,
@@ -980,13 +979,13 @@ function createApp() {
     });
   });
 
-  // /v1 is the multi-user gateway: resolve the presented credential (qk-* key,
-  // admin session, or legacy PROXY_API_KEY) and enforce per-user quotas. When
-  // no credential infrastructure exists at all the gateway stays open so
-  // existing single-user setups keep working.
+  // /v1 is the multi-user gateway: resolve the presented credential (qk-* key
+  // or admin session) and enforce per-user quotas. When no credential
+  // infrastructure exists at all the gateway stays open so existing
+  // single-user setups keep working.
   app.use(['/v1', '/v1/v1'], gatewayGuard, quotaGuard);
-  // /usage 与 /v1 同策略：一旦存在凭据设施（PROXY_API_KEY 或任何 API Key）即要求认证，
-  // 同时校验 session 对应用户 enabled 状态（apiKeyGuard 未设 PROXY_API_KEY 时会裸放行）
+  // /usage 与 /v1 同策略：一旦存在凭据设施（任何 API Key）即要求认证，
+  // 同时校验 session 对应用户 enabled 状态
   app.use('/usage', gatewayGuard);
 
   // Multi-account admin API (accounts / users / keys / grants / usage).
@@ -1810,27 +1809,6 @@ function createApp() {
     sendIndex(res);
   });
 
-  // --- Admin: Set Proxy API Key (no apiKeyGuard, bootstrap operation) ---
-  app.post('/admin/set-proxy-api-key', adminGuard, (req, res) => {
-    const newKey = String(req.body?.key || '').trim();
-    db.setConfig('PROXY_API_KEY', newKey);
-    
-    res.json({ ok: true, message: 'Proxy API Key updated. Restarting...' });
-    setTimeout(() => {
-      // 测试门控：与 update-env / restart 一致，禁止 spawn 替换进程并 exit
-      if (process.env.QODER_PROXY_NO_RESTART === '1') {
-        log('restart suppressed (QODER_PROXY_NO_RESTART=1)');
-        return;
-      }
-      const { spawn } = require('child_process');
-      const serverPath = path.join(__dirname, 'server.js');
-      const child = spawn(process.execPath, [serverPath], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env } });
-      child.unref();
-      log('restarting after proxy API key update', { pid: child.pid });
-      process.exit(0);
-    }, 500);
-  });
-
   // --- Admin: Get All Env Config ---
   app.get('/admin/env-config', adminGuard, (_req, res) => {
     const configRows = db.getAllConfig();
@@ -1843,8 +1821,6 @@ function createApp() {
 
   // --- Admin: Update Env Config & Restart ---
   // Body: { updates?: {KEY: value}, deletes?: [KEY...] } — 至少一项。
-  // PROXY_API_KEY 有专门管理端点，不允许从这里删除。
-  const ENV_DELETE_PROTECTED = new Set(['PROXY_API_KEY']);
   const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
   app.post('/admin/update-env', adminGuard, (req, res) => {
@@ -1869,13 +1845,6 @@ function createApp() {
       }
     }
     const deleteKeys = hasDeletes ? deletes.filter((k) => typeof k === 'string') : [];
-    const blocked = deleteKeys.filter((k) => ENV_DELETE_PROTECTED.has(k));
-    if (blocked.length > 0) {
-      return openAiError(
-        res,
-        new AppError(400, 'invalid_request', `Protected keys cannot be deleted: ${blocked.join(', ')}`),
-      );
-    }
 
     if (hasUpdates) {
       for (const [key, value] of Object.entries(updates)) {

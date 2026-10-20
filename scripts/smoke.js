@@ -11,14 +11,14 @@
  * account (added in the admin console) and will make real model calls that
  * consume time and quota.
  *
- * PROXY_API_KEY is read from .env (or the environment) and sent automatically, so
- * this keeps working once the proxy requires a key.
+ * API_KEY is read from SMOKE_API_KEY (or the environment) and sent automatically,
+ * so this keeps working once the proxy requires a key.
  */
 
 require('dotenv').config();
 
 const BASE_URL = process.env.SMOKE_BASE_URL || 'http://127.0.0.1:3000';
-const API_KEY = (process.env.SMOKE_API_KEY || process.env.PROXY_API_KEY || '').trim();
+const API_KEY = (process.env.SMOKE_API_KEY || '').trim();
 const args = process.argv.slice(2);
 const fullMode = args.includes('--full');
 
@@ -88,7 +88,7 @@ async function testModels() {
   const { status, data } = await request('GET', '/v1/models');
   assert(
     status !== 401,
-    'Unauthorized. The proxy requires PROXY_API_KEY — set it in .env (or pass SMOKE_API_KEY).'
+    'Unauthorized. The proxy requires an API key — pass SMOKE_API_KEY=<qk- key>.'
   );
   assert(status === 200, `Expected status 200, got ${status}`);
   assert(data.object === 'list', `Expected object "list", got "${data.object}"`);

@@ -62,7 +62,7 @@ qodercli login   # must log in once
 npm install
 ```
 
-`.env` is not required: on first start without one, the proxy creates it from the `.env.example` template and writes a **randomly generated** `PROXY_API_KEY` (unique per deployment; edit it in `.env` or in the admin console System Settings — changes take effect on next start).
+`.env` is not required: on first start without one, the proxy creates it from the `.env.example` template. No keys are written into it — gateway credentials are issued per user in the admin console (Users & Keys).
 
 You can also create it manually and then edit `.env`:
 
@@ -73,9 +73,6 @@ Copy-Item .env.example .env
 ```env
 # Choose backend: "cn" or "global"
 CLI_BACKEND=cn
-
-# Gateway API key (recommended, protects your Qoder quota)
-PROXY_API_KEY=
 ```
 
 Restart the service after editing `.env` to apply changes. Settings saved in the admin console (System Settings) are synced back to `.env`.
@@ -134,23 +131,23 @@ Quick Start gets the service running; this section walks you the rest of the way
 
 ### Step 8: connect your client
 
-See the next section, Local Client Adaptation: OpenAI-compatible clients just need the Base URL and `PROXY_API_KEY`; Anthropic-style clients need two environment variables.
+See the next section, Local Client Adaptation: OpenAI-compatible clients just need the Base URL and a `qk-` API key; Anthropic-style clients need two environment variables.
 
 ## Local Client Adaptation
 
 ### OpenAI-Compatible Interface
 
 - Base URL: `http://127.0.0.1:3000/v1`
-- API Key: the `PROXY_API_KEY` you set in `.env`; if you did not set one, any placeholder works (e.g. `not-used`)
+- API Key: a `qk-` key issued in the admin console (Users & Keys); while zero keys exist, any placeholder works (e.g. `not-used`)
 - Model: select from `/v1/models` or enter a model ID manually
 
-Do not enter your Qoder Token into the client. Keep the Token only in this project's local `.env`.
+Do not enter your Qoder Token into the client. Keep the Token only in this project's local database (entered in the admin console, AES-256-GCM encrypted).
 
 ### Anthropic-Compatible Interface
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3000"
-$env:ANTHROPIC_AUTH_TOKEN = "your-PROXY_API_KEY"   # any value if PROXY_API_KEY is unset
+$env:ANTHROPIC_AUTH_TOKEN = "your qk- key"   # any value while zero keys exist
 ```
 
 Do not append `/v1` to `ANTHROPIC_BASE_URL`; clients usually add API paths automatically.
@@ -163,7 +160,7 @@ The repository includes `opencode.json` for local compatibility verification:
 opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
 ```
 
-If you set `PROXY_API_KEY`, replace `not-used` in `opencode.json`'s `options.apiKey` with your key.
+If you have issued `qk-` keys, replace `not-used` in `opencode.json`'s `options.apiKey` with your key.
 
 ## Admin Console
 
@@ -256,7 +253,7 @@ Reasoning effort aliases: `qwen3.8-max-effort-low`, `-medium`, `-high`, `-max`, 
 
 | Scope | Auth |
 |-------|------|
-| `/v1/*`, `/usage/*` | Required once `PROXY_API_KEY` is set; the key may be `PROXY_API_KEY` itself or a `qk-` API key issued from the console |
+| `/v1/*`, `/usage/*` | Required once any `qk-` API key exists; while zero keys exist, the gateway is open to local callers |
 | `/health` | Always open |
 | `/admin/*` | Admin session: `POST /admin/login` for a token, then send `Authorization: Bearer <token>` |
 | `/ui` | Browser page, local token storage |
@@ -394,27 +391,27 @@ Common error codes:
 - **Cross-origin browser requests are refused** (loopback origins only). Otherwise any web page you visit could call the proxy in the background and spend your Qoder quota
 - **Requests naming a non-loopback `Host` are refused**, which blocks DNS rebinding (binding `0.0.0.0` without `ALLOWED_HOSTS` disables this protection — the startup log warns about it)
 - The admin console `/admin/*` requires login; the login endpoint is rate-limited in memory (5 failures within 60 s locks the IP for 15 minutes)
-- With `PROXY_API_KEY` set (or any API key existing), `/v1/*` requires the key. This project exposes **no unauthenticated endpoint that returns any key**
+- With any `qk-` API key issued, `/v1/*` requires the key. This project exposes **no unauthenticated endpoint that returns any key**
 - Account PATs and API keys are stored AES-256-GCM encrypted under `data/` (master key `data/.secret-key`, generated on first start). `data/` is excluded by `.gitignore` — **never commit, back up, or distribute that directory**
 - Logs redact tokens, cookies, Authorization headers, and other sensitive data; `.env`, `data/`, and logs are excluded from version control
 
-Worth stating plainly: **without `PROXY_API_KEY`, any process on your machine can use the proxy.** Loopback binding keeps out the network, not your own machine. Setting a key is recommended.
+Worth stating plainly: **while zero API keys exist (none issued or all revoked), any process on your machine can use the proxy.** Loopback binding keeps out the network, not your own machine. Issuing a key in the admin console is recommended.
 
-### Client Authentication (PROXY_API_KEY)
+### Client Authentication (API Key)
 
-Once set in `.env`, clients must send the key as:
+Once a `qk-` key has been issued in the admin console (Users & Keys), clients must send it as:
 
 ```text
-Authorization: Bearer <PROXY_API_KEY>
+Authorization: Bearer <qk-key>
 ```
 
 or, as Anthropic-style clients prefer:
 
 ```text
-x-api-key: <PROXY_API_KEY>
+x-api-key: <qk-key>
 ```
 
-Leave it empty to require no key. `/health` is always open so scripts can probe liveness.
+While zero keys exist the gateway stays open (local open mode). `/health` is always open so scripts can probe liveness.
 
 If a local web app legitimately needs browser access, allow it explicitly with `ALLOWED_ORIGINS`; if you deliberately reach the proxy under another hostname, use `ALLOWED_HOSTS`. Both default to empty — once you use them, reviewing the security model becomes your job.
 
@@ -433,7 +430,7 @@ If a local web app legitimately needs browser access, allow it explicitly with `
 - The `Bash` tool additionally requires `SERVER_TOOL_ALLOW_BASH=1` **and** a non-empty `SERVER_TOOL_BASH_ALLOWLIST`. Commands run without a shell, so chaining, pipes, redirection, and substitution are refused
 - On Windows, skipping the shell means `.cmd`/`.bat` shims (such as `npm`) cannot run — only real executables (`node`, `git`, `python`)
 
-Treat the feature as experimental, and pair it with `PROXY_API_KEY`.
+Treat the feature as experimental, and pair it with a `qk-` API key (once issued, `/v1/*` enforces auth, keeping local processes from abusing tool execution).
 
 ## Compliance & Safety
 
@@ -450,7 +447,7 @@ Treat the feature as experimental, and pair it with `PROXY_API_KEY`.
 
 - Use only on your own machine, bound to `127.0.0.1`
 - The default admin password (`admin` / `admin123`) is force-changed on first login and cannot be skipped
-- Do not bind to `0.0.0.0` and do not expose the service to the public internet; if LAN access is truly needed, set `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` and keep `PROXY_API_KEY` configured
+- Do not bind to `0.0.0.0` and do not expose the service to the public internet; if LAN access is truly needed, set `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` and issue gateway API keys
 - Do not send your Token — or the `data/` directory (it holds the encryption master key) — to anyone
 - Do not commit `.env` to Git
 - If you suspect a Token leak, revoke the PAT immediately from the official Qoder account page and create a new one

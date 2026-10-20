@@ -758,12 +758,12 @@ test('runtime-status, update-env deletes and removed get-proxy-key', async () =>
     const afterDel = await (await authedFetch(baseUrl, headers, '/admin/env-config')).json();
     assert.ok(!('TEST_DELETE_VAR' in afterDel.config), 'deleted variable should be gone');
 
-    // PROXY_API_KEY cannot be deleted through this endpoint.
-    const blocked = await authedFetch(baseUrl, headers, '/admin/update-env', {
+    // PROXY_API_KEY is retired: no longer protected, deletable like any other key.
+    const delLegacy = await authedFetch(baseUrl, headers, '/admin/update-env', {
       method: 'POST',
       body: JSON.stringify({ deletes: ['PROXY_API_KEY'] }),
     });
-    assert.equal(blocked.status, 400);
+    assert.equal(delLegacy.status, 200);
 
     // Malformed payload is rejected.
     const malformed = await authedFetch(baseUrl, headers, '/admin/update-env', {

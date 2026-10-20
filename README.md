@@ -62,7 +62,7 @@ qodercli login   # 必须登录一次
 npm install
 ```
 
-`.env` 不是必需的：不存在时首次启动会以 `.env.example` 为模板自动创建，并生成**随机**的 `PROXY_API_KEY` 写入（每部署唯一，可在 `.env` 或管理台「系统设置」中修改，下次启动生效）。
+`.env` 不是必需的：不存在时首次启动会以 `.env.example` 为模板自动创建（不写入任何密钥——网关访问凭据统一在管理台「用户密钥」中按用户签发）。
 
 也可以手动创建后编辑 `.env`：
 
@@ -73,9 +73,6 @@ Copy-Item .env.example .env
 ```env
 # 选择后端: "cn" 或 "global"
 CLI_BACKEND=cn
-
-# 网关调用密钥（推荐设置，保护你的 Qoder 额度）
-PROXY_API_KEY=
 ```
 
 修改 `.env` 后重启服务即可生效。管理台「系统设置」页保存的配置会同步写回 `.env`。
@@ -133,23 +130,23 @@ curl.exe http://127.0.0.1:3000/v1/chat/completions `
 
 ### 第 8 步：接入你的客户端
 
-见下一节「接入客户端」：OpenAI 兼容客户端填 Base URL 与 `PROXY_API_KEY` 即可；Anthropic 系客户端设置两个环境变量即可。
+见下一节「接入客户端」：OpenAI 兼容客户端填 Base URL 与 `qk-` API Key 即可；Anthropic 系客户端设置两个环境变量即可。
 
 ## 接入客户端
 
 ### OpenAI 兼容接口
 
 - Base URL：`http://127.0.0.1:3000/v1`
-- API Key：填写你在 `.env` 中设置的 `PROXY_API_KEY`；未设置时填任意占位值（如 `not-used`）
+- API Key：填写管理台「用户密钥」签发的 `qk-` 密钥；一个密钥都不存在时网关对本机开放，可填任意占位值（如 `not-used`）
 - Model：从 `/v1/models` 返回列表选择，或手动输入模型 ID
 
-不要将 Qoder Token 填入客户端。Token 只应保存在本机 `.env` 中。
+不要将 Qoder Token 填入客户端。Token 只应保存在本机数据库中（管理台添加账号时写入，AES-256-GCM 加密）。
 
 ### Anthropic 兼容接口
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3000"
-$env:ANTHROPIC_AUTH_TOKEN = "your-PROXY_API_KEY"   # 未设置 PROXY_API_KEY 时填任意值
+$env:ANTHROPIC_AUTH_TOKEN = "你的 qk- 密钥"   # 一个密钥都不存在时填任意值
 ```
 
 `ANTHROPIC_BASE_URL` 不要追加 `/v1`，客户端通常会自动拼接 API 路径。
@@ -162,7 +159,7 @@ $env:ANTHROPIC_AUTH_TOKEN = "your-PROXY_API_KEY"   # 未设置 PROXY_API_KEY 时
 opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
 ```
 
-如果你设置了 `PROXY_API_KEY`，需要把 `opencode.json` 里 `options.apiKey` 的 `not-used` 换成你的密钥。
+如果签发过 `qk-` 密钥，需要把 `opencode.json` 里 `options.apiKey` 的 `not-used` 换成你的密钥。
 
 ## 管理控制台
 
@@ -257,7 +254,7 @@ $env:QODERCN_MAX_OUTPUT_TOKENS = "4096"
 
 | 范围 | 认证方式 |
 |------|----------|
-| `/v1/*`、`/usage/*` | 设置 `PROXY_API_KEY` 后必须携带；密钥可以是 `PROXY_API_KEY` 本身，也可以是管理台发放的 `qk-` API Key |
+| `/v1/*`、`/usage/*` | 存在任何 `qk-` API Key 后必须携带；一个密钥都不存在时对本机开放 |
 | `/health` | 始终开放 |
 | `/admin/*` | 管理会话：`POST /admin/login` 换取 token，后续请求带 `Authorization: Bearer <token>` |
 | `/ui` | 浏览器页面，本地 token 存储 |
@@ -395,27 +392,27 @@ Anthropic 口径（`/v1/messages*`）：
 - **浏览器跨源请求一律拒绝**（仅允许本机 loopback 来源）。否则你访问的任意网页都能在后台调用代理、消耗你的 Qoder 额度
 - **`Host` 头不是 loopback 的请求一律拒绝**，用于阻断 DNS rebinding（绑定 `0.0.0.0` 且未配置 `ALLOWED_HOSTS` 时该防护失效，启动日志会警告）
 - 管理控制台 `/admin/*` 需要登录；登录接口带内存级限速（60 秒内连续失败 5 次锁定 15 分钟）
-- 设置 `PROXY_API_KEY` 或存在任何 API Key 后，`/v1/*` 强制校验密钥；本项目**不提供任何免认证读取密钥的接口**
+- 签发任何 `qk-` API Key 后，`/v1/*` 强制校验密钥；本项目**不提供任何免认证读取密钥的接口**
 - 账号 PAT 与 API Key 以 AES-256-GCM 加密存放于 `data/`（主密钥 `data/.secret-key`，首次启动自动生成）；`data/` 已被 `.gitignore` 排除，**绝不要提交、备份或分发该目录**
 - 日志自动脱敏 token、cookie、Authorization 头等敏感信息；`.env`、`data/`、日志均不纳入版本控制
 
-需要提醒的是：**不设置 `PROXY_API_KEY` 时，本机上任何进程都可以使用这个代理。** loopback 绑定挡的是外部网络，挡不住本机。建议设置一个。
+需要提醒的是：**一个 API Key 都不存在时（未签发或已全部吊销），本机上任何进程都可以使用这个代理。** loopback 绑定挡的是外部网络，挡不住本机。建议在管理台「用户密钥」签发一个。
 
-### 客户端认证（PROXY_API_KEY）
+### 客户端认证（API Key）
 
-在 `.env` 中设置后，客户端需要在请求头中携带：
+在管理台「用户密钥」签发 `qk-` 密钥后，客户端需要在请求头中携带：
 
 ```text
-Authorization: Bearer <PROXY_API_KEY>
+Authorization: Bearer <qk-密钥>
 ```
 
 或者（Anthropic 系客户端习惯）：
 
 ```text
-x-api-key: <PROXY_API_KEY>
+x-api-key: <qk-密钥>
 ```
 
-留空则不校验密钥。`/health` 始终开放，便于脚本探活。
+一个密钥都不存在时不校验（本机开放模式）。`/health` 始终开放，便于脚本探活。
 
 如果你有本机 Web 应用需要从浏览器调用代理，用 `ALLOWED_ORIGINS` 显式放行；如果你确实要用别的主机名访问，用 `ALLOWED_HOSTS`。这两个开关默认为空——一旦使用，安全模型就需要你自己评估了。
 
@@ -434,7 +431,7 @@ x-api-key: <PROXY_API_KEY>
 - `Bash` 工具额外需要 `SERVER_TOOL_ALLOW_BASH=1` **且** `SERVER_TOOL_BASH_ALLOWLIST` 非空；命令不经过 shell 执行，因此管道、串联、重定向、命令替换都会被拒绝
 - Windows 上因为不走 shell，无法执行 `.cmd`/`.bat` 包装（如 `npm`），只能执行真正的可执行文件（`node`、`git`、`python` 等）
 
-请把这个特性当作实验性功能，并且和 `PROXY_API_KEY` 一起使用。
+请把这个特性当作实验性功能，并且配合 `qk-` API Key 一起使用（签发后 `/v1/*` 强制校验，防止本机任意进程滥用工具执行）。
 
 ## 合规与安全
 
@@ -451,7 +448,7 @@ x-api-key: <PROXY_API_KEY>
 
 - 只在本机使用，只监听 `127.0.0.1`
 - 默认管理员密码（`admin` / `admin123`）在首次登录时被强制要求修改，无法跳过
-- 不要绑定 `0.0.0.0`，不要暴露到公网；确需局域网访问时配置 `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` 并设置 `PROXY_API_KEY`
+- 不要绑定 `0.0.0.0`，不要暴露到公网；确需局域网访问时配置 `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` 并签发 `qk-` API Key
 - 不要把 Token 或 `data/` 目录（含加密主密钥）发给别人
 - 不要把 `.env` 提交到 Git
 - 如果怀疑 Token 泄露，立即到 Qoder 官方账号页面吊销 PAT 并重新创建

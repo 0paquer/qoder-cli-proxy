@@ -22,7 +22,6 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** 已由其他模块接管、不在设置页暴露的配置项 */
 const HIDDEN_ENV_PREFIXES = [/^QODERCN_/]; // 接入参数已迁移至 API Key 维度（用户密钥页配置）
 const HIDDEN_ENV_KEYS = new Set([
-  'PROXY_API_KEY', // 网关访问密钥，仅通过 /admin/set-proxy-api-key 管理
   'ADMIN_USERNAME', // 遗留变量：登录账号在「用户密钥」页管理，改此值不生效
   'ADMIN_PASSWORD',
 ]);

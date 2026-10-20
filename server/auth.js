@@ -1,6 +1,5 @@
 'use strict';
 
-const crypto = require('crypto');
 const { AppError, anthropicError, openAiError } = require('./errors');
 
 // The proxy binds to 127.0.0.1, but that alone does not make it private:
@@ -108,15 +107,8 @@ function isAllowedOrigin(originHeader) {
 }
 
 function isProxyAuthEnabled() {
-  return Boolean((process.env.PROXY_API_KEY || '').trim());
-}
-
-function timingSafeEquals(presented, expected) {
-  // Hash first so the comparison operates on equal-length buffers without
-  // leaking the expected key's length.
-  const left = crypto.createHash('sha256').update(String(presented), 'utf8').digest();
-  const right = crypto.createHash('sha256').update(String(expected), 'utf8').digest();
-  return crypto.timingSafeEqual(left, right);
+  // Credential infrastructure now means user-issued API keys only.
+  return require('./stores/users').hasAnyApiKeys();
 }
 
 function extractPresentedKey(req) {
@@ -178,58 +170,13 @@ function localOnlyGuard(req, res, next) {
   return next();
 }
 
-function apiKeyGuard(req, res, next) {
-  const expected = (process.env.PROXY_API_KEY || '').trim();
-  if (!expected) return next(); // Opt-in; unset means no key required.
-
-  const presented = extractPresentedKey(req);
-  if (!presented) {
-    return respondWithError(
-      req,
-      res,
-      new AppError(
-        401,
-        'invalid_api_key',
-        'Invalid or missing API key. Send PROXY_API_KEY as "Authorization: Bearer <key>" ' +
-          'or "x-api-key: <key>".',
-        'authentication_error'
-      )
-    );
-  }
-  
-  // Check if it's the PROXY_API_KEY
-  if (timingSafeEquals(presented, expected)) {
-    return next();
-  }
-  
-  // Check if it's a valid admin session token
-  const db = require('./db');
-  const session = db.verifySession(presented);
-  if (session) {
-    return next();
-  }
-  
-  return respondWithError(
-    req,
-    res,
-    new AppError(
-      401,
-      'invalid_api_key',
-      'Invalid or missing API key. Send PROXY_API_KEY as "Authorization: Bearer <key>" ' +
-        'or "x-api-key: <key>".',
-      'authentication_error'
-    )
-  );
-}
-
 // ── Multi-user gateway authentication ─────────────────────────────────────────
 // Resolves the presented credential to a principal:
 //   qk-* keys  → api_key row → owning user
 //   session    → user row by username
-//   PROXY_API_KEY → legacy admin bootstrap (userId null)
-// Enforcement policy: as soon as PROXY_API_KEY is set OR any api_key exists,
-// /v1 traffic must present a valid credential. When neither is configured the
-// proxy stays open (single-user local mode) so existing setups keep working.
+// Enforcement policy: as soon as any api_key exists, /v1 traffic must present
+// a valid credential. When none exists the proxy stays open (single-user local
+// mode) so fresh setups work before the first key is issued.
 
 function resolvePrincipal(presentedKey) {
   const usersStore = require('./stores/users');
@@ -280,11 +227,6 @@ function resolvePrincipal(presentedKey) {
     };
   }
 
-  const proxyKey = (process.env.PROXY_API_KEY || '').trim();
-  if (proxyKey && timingSafeEquals(value, proxyKey)) {
-    return { type: 'legacy', userId: null, apiKeyId: null, username: null, role: 'admin' };
-  }
-
   return null;
 }
 
@@ -298,13 +240,12 @@ const ANONYMOUS_PRINCIPAL = Object.freeze({
 
 function gatewayGuard(req, res, next) {
   const usersStore = require('./stores/users');
-  const proxyKey = (process.env.PROXY_API_KEY || '').trim();
   const presented = extractPresentedKey(req);
 
   // Open mode: no credential infrastructure at all. Native clients sometimes
   // send placeholder keys (Anthropic SDKs always populate x-api-key), so any
   // presented value is accepted as the anonymous local principal.
-  if (!proxyKey && !usersStore.hasAnyApiKeys()) {
+  if (!usersStore.hasAnyApiKeys()) {
     req.principal = ANONYMOUS_PRINCIPAL;
     return next();
   }
@@ -388,7 +329,7 @@ function canUseAccount(principal, accountId) {
   return require('./stores/users').userHasGrant(principal.userId, accountId);
 }
 
-// Admin guard: accepts admin token (from login) OR PROXY_API_KEY
+// Admin guard: accepts an admin session token (from login)
 function adminGuard(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
@@ -398,15 +339,9 @@ function adminGuard(req, res, next) {
       new AppError(401, 'unauthorized', 'Please login first.', 'authentication_error')
     );
   }
-  
+
   const token = auth.slice(7).trim();
-  
-  // Check if it's the PROXY_API_KEY
-  const proxyKey = (process.env.PROXY_API_KEY || '').trim();
-  if (proxyKey && timingSafeEquals(token, proxyKey)) {
-    return next();
-  }
-  
+
   // Check if it's a valid admin session token
   const db = require('./db');
   const session = db.verifySession(token);
@@ -415,8 +350,7 @@ function adminGuard(req, res, next) {
     const user = require('./stores/users').getUserByUsername(session.username);
     if (user && user.enabled && user.role === 'admin') {
       // 首登改密强制：admin 仍在使用初始默认密码时，除白名单端点外一律 403，
-      // 迫使首次部署先改掉默认密码再执行任何管理操作。PROXY_API_KEY 分支
-      // 不受影响（脚本自动化场景没有初始密码的概念）。
+      // 迫使首次部署先改掉默认密码再执行任何管理操作。
       if (db.isDefaultAdminPassword(user.username)) {
         // adminGuard 同时挂在 app 级路由（req.path = /admin/xxx）与
         // /admin 挂载的 router 内（req.path = /xxx），归一化后再比对。
@@ -458,7 +392,6 @@ function adminGuard(req, res, next) {
 module.exports = {
   adminGuard,
   accountsForPrincipal,
-  apiKeyGuard,
   canUseAccount,
   gatewayGuard,
   isAllowedHost,

@@ -11,6 +11,7 @@ require('../server/migrations').runMigrations(require('../server/db').db);
 
 const qoderCli = require('../server/qoder-session');
 const { createApp } = require('../server/app');
+const usersStore = require('../server/stores/users');
 const { isAllowedHost, isAllowedOrigin } = require('../server/auth');
 
 function listen(app) {
@@ -191,83 +192,36 @@ test('a rebinding Host header is refused', async () => {
   }
 });
 
-test('PROXY_API_KEY is actually enforced once set', async () => {
-  await withEnv({ PROXY_API_KEY: 'sekret-key' }, async () => {
-    const { server, baseUrl } = await listen(createApp());
-    try {
-      const missing = await fetch(`${baseUrl}/v1/models`);
-      assert.equal(missing.status, 401);
-      assert.equal((await missing.json()).error.code, 'invalid_api_key');
-
-      const wrong = await fetch(`${baseUrl}/v1/models`, {
-        headers: { authorization: 'Bearer nope' },
-      });
-      assert.equal(wrong.status, 401);
-
-      const bearer = await fetch(`${baseUrl}/v1/models`, {
-        headers: { authorization: 'Bearer sekret-key' },
-      });
-      assert.equal(bearer.status, 200);
-
-      // Anthropic clients send the key as x-api-key instead.
-      const apiKeyHeader = await fetch(`${baseUrl}/v1/models`, {
-        headers: { 'x-api-key': 'sekret-key' },
-      });
-      assert.equal(apiKeyHeader.status, 200);
-    } finally {
-      server.close();
-    }
-  });
-});
-
-test('PROXY_API_KEY also guards the usage endpoints', async () => {
-  await withEnv({ PROXY_API_KEY: 'sekret-key' }, async () => {
-    const { server, baseUrl } = await listen(createApp());
-    try {
-      assert.equal((await fetch(`${baseUrl}/usage/local`)).status, 401);
-      const reset = await fetch(`${baseUrl}/usage/reset-local`, { method: 'POST' });
-      assert.equal(reset.status, 401);
-
-      const allowed = await fetch(`${baseUrl}/usage/local`, {
-        headers: { authorization: 'Bearer sekret-key' },
-      });
-      assert.equal(allowed.status, 200);
-    } finally {
-      server.close();
-    }
-  });
-});
-
 test('key errors on /v1/messages keep the Anthropic error shape', async () => {
-  await withEnv({ PROXY_API_KEY: 'sekret-key' }, async () => {
-    const { server, baseUrl } = await listen(createApp());
-    try {
-      const response = await fetch(`${baseUrl}/v1/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }),
-      });
-      assert.equal(response.status, 401);
-      const body = await response.json();
-      assert.equal(body.type, 'error');
-      assert.equal(body.error.type, 'authentication_error');
-    } finally {
-      server.close();
-    }
-  });
+  // Any issued api key switches the gateway out of open mode.
+  const created = usersStore.createUser({ username: 'auser-shape', password: 'secret123' });
+  assert.ok(created.ok);
+  usersStore.createApiKey(created.user.id, 'shape');
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 401);
+    const body = await response.json();
+    assert.equal(body.type, 'error');
+    assert.equal(body.error.type, 'authentication_error');
+  } finally {
+    server.close();
+  }
 });
 
 test('/health stays open for liveness checks and leaks nothing', async () => {
-  await withEnv({ PROXY_API_KEY: 'sekret-key' }, async () => {
-    const { server, baseUrl } = await listen(createApp());
-    try {
-      const health = await fetch(`${baseUrl}/health`);
-      assert.equal(health.status, 200);
-      assert.deepEqual(await health.json(), { ok: true });
-    } finally {
-      server.close();
-    }
-  });
+  const { server, baseUrl } = await listen(createApp());
+  try {
+    const health = await fetch(`${baseUrl}/health`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { ok: true });
+  } finally {
+    server.close();
+  }
 });
 
 test('the root route no longer exposes local filesystem paths', async () => {

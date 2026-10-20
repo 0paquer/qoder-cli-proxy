@@ -31,13 +31,15 @@ The proxy is designed to be reachable **only from the machine it runs on**:
   your Qoder quota from the background.
 - Requests naming a non-loopback host in the `Host` header are refused, which is
   what blocks DNS-rebinding attacks.
-- `PROXY_API_KEY`, when set, is required on `/v1/*` and `/usage/*` as
-  `Authorization: Bearer <key>` or `x-api-key: <key>`.
+- A `qk-` API key, once any exists, is required on `/v1/*` and `/usage/*` as
+  `Authorization: Bearer <key>` or `x-api-key: <key>`. While zero keys exist
+  the gateway stays open (local open mode).
 
 Two things this does **not** protect against, by design:
 
-- **Other processes on your own machine.** Without `PROXY_API_KEY`, anything
-  running locally can use the proxy. Set a key if that matters to you.
+- **Other processes on your own machine.** While zero API keys exist, anything
+  running locally can use the proxy. Issue a key in the admin console if that
+  matters to you.
 - **Public exposure.** Do not bind to `0.0.0.0`, and do not put the proxy behind
   a tunnel, port forward, or reverse proxy. `ALLOWED_HOSTS` and
   `ALLOWED_ORIGINS` exist as deliberate escape hatches; if you use them, the
@@ -57,7 +59,7 @@ itself. When it is on:
   pipes, redirection, and substitution are refused.
 
 Treat the whole feature as experimental. Enabling it widens your exposure to
-anything that can reach the proxy, so pair it with `PROXY_API_KEY`.
+anything that can reach the proxy, so pair it with an issued `qk-` API key.
 
 ## Handling your token
 

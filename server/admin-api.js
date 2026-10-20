@@ -15,7 +15,6 @@
  *   /admin/usage/*              — aggregated usage facts for the console
  */
 
-const crypto = require('crypto');
 const express = require('express');
 const { AppError, openAiError } = require('./errors');
 const { adminGuard } = require('./auth');
@@ -42,12 +41,6 @@ function notFound(res, message) {
   return fail(res, new AppError(404, 'not_found', message));
 }
 
-function timingSafeEqual(a, b) {
-  const left = crypto.createHash('sha256').update(String(a), 'utf8').digest();
-  const right = crypto.createHash('sha256').update(String(b), 'utf8').digest();
-  return crypto.timingSafeEqual(left, right);
-}
-
 function createAdminApi() {
   const router = express.Router();
 
@@ -57,17 +50,6 @@ function createAdminApi() {
     const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     if (!token) {
       return fail(res, new AppError(401, 'unauthorized', 'Not logged in.'));
-    }
-
-    const proxyKey = (process.env.PROXY_API_KEY || '').trim();
-    if (proxyKey && timingSafeEqual(token, proxyKey)) {
-      return res.json({
-        ok: true,
-        authenticated: true,
-        authType: 'legacy',
-        username: null,
-        role: 'admin',
-      });
     }
 
     const session = dbModule.verifySession(token);
@@ -692,12 +674,11 @@ function createAdminApi() {
       ? usersStore.deleteApiKey(req.params.keyId)
       : usersStore.revokeApiKey(req.params.keyId);
     if (!ok) return notFound(res, 'API key not found');
-    // 吊销后若网关回到开放模式（无有效 key 且未设 PROXY_API_KEY），必须明确告知
-    const proxyKey = (process.env.PROXY_API_KEY || '').trim();
+    // 吊销后若网关回到开放模式（已无任何有效 key），必须明确告知
     let warning;
-    if (hadActive && !proxyKey && !usersStore.hasAnyApiKeys()) {
+    if (hadActive && !usersStore.hasAnyApiKeys()) {
       warning =
-        '这是最后一个有效的 API Key，且未设置 PROXY_API_KEY —— /v1 网关已回到开放模式，本机任意进程均可调用。请新建密钥或设置 PROXY_API_KEY。';
+        '这是最后一个有效的 API Key —— /v1 网关已回到开放模式，本机任意进程均可调用。请新建密钥。';
     }
     res.json(warning ? { ok: true, warning } : { ok: true });
   });
