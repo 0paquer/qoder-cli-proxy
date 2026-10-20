@@ -224,25 +224,6 @@ test('/health stays open for liveness checks and leaks nothing', async () => {
   }
 });
 
-test('openapi.json is served as a static spec', async () => {
-  const { server, baseUrl } = await listen(createApp());
-  try {
-    const res = await fetch(`${baseUrl}/openapi.json`);
-    assert.equal(res.status, 200);
-    const spec = await res.json();
-    assert.equal(spec.openapi, '3.0.3');
-    assert.ok(spec.paths['/health'], 'health endpoint documented');
-    assert.ok(spec.paths['/v1/chat/completions']?.post, 'gateway endpoint documented');
-    assert.ok(spec.paths['/admin/login']?.post, 'login documented');
-    assert.ok(spec.paths['/admin/users/{id}/keys']?.get, 'path params rendered in OpenAPI style');
-    const page = await fetch(`${baseUrl}/ui/swagger.html`);
-    assert.equal(page.status, 200);
-    assert.ok((await page.text()).includes('swagger-ui-bundle'));
-  } finally {
-    server.close();
-  }
-});
-
 test('the root route no longer exposes local filesystem paths', async () => {
   const { server, baseUrl } = await listen(createApp());
   try {

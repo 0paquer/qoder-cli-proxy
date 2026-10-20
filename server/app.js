@@ -1769,14 +1769,6 @@ function createApp() {
     res.json({ ok: true });
   });
 
-  // --- OpenAPI docs: static spec + Swagger UI (static page) ---
-  app.get('/openapi.json', (_req, res) => {
-    res.sendFile(path.join(__dirname, 'openapi.json'));
-  });
-  app.get('/ui/swagger.html', (_req, res) => {
-    res.sendFile(path.join(__dirname, 'swagger.html'));
-  });
-
   // --- Static Web Console at /ui ---
   const publicDir = path.join(__dirname, '..', 'public');
 

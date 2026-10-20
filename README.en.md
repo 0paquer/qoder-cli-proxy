@@ -249,8 +249,6 @@ Reasoning effort aliases: `qwen3.8-max-effort-low`, `-medium`, `-high`, `-max`, 
 
 ## API Documentation
 
-> Interactive docs (Swagger UI): open <http://127.0.0.1:3000/ui/swagger.html> after starting; the machine-readable spec lives at `/openapi.json` (source: [server/openapi.json](server/openapi.json), maintained by hand — update it when adding endpoints).
-
 ### Authentication
 
 | Scope | Auth |
