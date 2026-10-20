@@ -296,14 +296,14 @@ x-api-key: <key>
 
 ### Response Examples
 
-**Model list** `GET /v1/models` (standard OpenAI shell; each entry spreads the CLI model catalog's raw ModelInfo fields (`value`/`displayName`/`priceFactor`/`isFree`/...) verbatim, with only the four standard fields (`id`/`object`/`created`/`owned_by`) added — no renaming or repackaging):
+**Model list** `GET /v1/models` (standard OpenAI shell; each entry spreads the CLI model catalog's raw ModelInfo fields (`value`/`displayName`/`priceFactor`/`isFree`/...) verbatim, with only the four standard fields (`id`/`object`/`created`/`owned_by`) added). `id` prefers `displayName` (third-party clients only display `id`, so the real model name surfaces there), while `value` keeps the raw CLI internal code; when a chat request's `model` carries a `displayName`, the gateway resolves it back to the CLI `value` automatically — passing `value` directly still works:
 
 ```json
 {
   "object": "list",
   "data": [
     {
-      "value": "Qwen3.8-Max",
+      "value": "Qmodel_38max",
       "displayName": "Qwen3.8-Max",
       "priceFactor": 1.0,
       "isFree": false,

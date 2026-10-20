@@ -472,6 +472,17 @@ async function invokeCliWithAccounts(principal, tracker, opts, runFn) {
     excludeIds.push(account.id);
     tracker.setAccount(account.id);
 
+    // 模型名解析：displayName → CLI value（目录查询有缓存，未命中原样返回）
+    let resolvedModel;
+    try {
+      resolvedModel =
+        typeof opts.resolveModel === 'function'
+          ? await opts.resolveModel(account, opts.model)
+          : undefined;
+    } catch (_) {
+      resolvedModel = undefined;
+    }
+
     try {
       const pat = accountsStore.getPat(account.id);
       if (!pat) {
@@ -495,6 +506,7 @@ async function invokeCliWithAccounts(principal, tracker, opts, runFn) {
         token: pat,
         baseUrl: account.baseUrl || undefined,
         backendType: account.backendType || backendType,
+        model: resolvedModel,
         onUsage: (usage) => tracker.onUsage(usage),
       });
       balancer.reportSuccess(account.id);
@@ -1013,6 +1025,31 @@ function createApp() {
     }
   };
 
+  /**
+   * 模型名解析：/v1/models 的 id 用 displayName（第三方客户端只显示 id，
+   * 不能暴露 Qmodel_* 内部代号），客户端回传时按账号目录反查回 CLI 的 value。
+   * 直接传 value 的旧调用方式不受影响（不命中 displayName 即原样返回）。
+   */
+  async function resolveModelForAccount(account, requested) {
+    const name = String(requested || '').trim();
+    if (!account || !name) return requested;
+    try {
+      const models = await loadAccountModelsCached(account);
+      if (!Array.isArray(models)) return requested;
+      const hit = models.find((m) => {
+        if (!m || typeof m !== 'object') return false;
+        return String(m.displayName ?? '').trim() === name;
+      });
+      if (hit) {
+        const value = String(hit.value ?? '').trim();
+        if (value) return value;
+      }
+    } catch (_) {
+      // 目录不可用时按原样传递
+    }
+    return requested;
+  }
+
   app.get(['/v1/models', '/models', '/v1/v1/models'], async (req, res) => {
     // 带有效密钥/会话时：返回该 principal 可用账号的真实模型列表（并集去重）。
     const principal = req.principal;
@@ -1028,7 +1065,9 @@ function createApp() {
           if (item.status !== 'fulfilled' || !Array.isArray(item.value)) continue;
           for (const m of item.value) {
             if (!m || typeof m !== 'object') continue;
-            const id = String(m.id ?? m.value ?? '').trim();
+            // id 优先用 displayName：第三方客户端只显示 id，真实名称由此透出
+            const displayName = String(m.displayName ?? '').trim();
+            const id = displayName || String(m.id ?? m.value ?? '').trim();
             if (!id || seen.has(id)) continue;
             seen.add(id);
             data.push({
@@ -1091,10 +1130,14 @@ function createApp() {
 
         let streamedText = '';
         try {
-          await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream(buildCliOptions({
-              messages: req.body.messages,
-              model,
+          await invokeCliWithAccounts(
+            req.principal,
+            tracker,
+            { backendType: 'cn', model, resolveModel: resolveModelForAccount },
+            (cliOpts) =>
+              qoderCli.runQoderCnCliStream(buildCliOptions({
+                messages: req.body.messages,
+                model: cliOpts.model || model,
               tools: normalizedTools,
               requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens,
@@ -1180,10 +1223,14 @@ function createApp() {
         };
 
         try {
-          await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream(buildCliOptions({
-              messages: req.body.messages,
-              model,
+          await invokeCliWithAccounts(
+            req.principal,
+            tracker,
+            { backendType: 'cn', model, resolveModel: resolveModelForAccount },
+            (cliOpts) =>
+              qoderCli.runQoderCnCliStream(buildCliOptions({
+                messages: req.body.messages,
+                model: cliOpts.model || model,
               tools: normalizedTools,
               requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens,
@@ -1426,10 +1473,14 @@ function createApp() {
 
         let streamedText = '';
         try {
-          await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream(buildCliOptions({
-              messages,
-              model,
+          await invokeCliWithAccounts(
+            req.principal,
+            tracker,
+            { backendType: 'cn', model, resolveModel: resolveModelForAccount },
+            (cliOpts) =>
+              qoderCli.runQoderCnCliStream(buildCliOptions({
+                messages,
+                model: cliOpts.model || model,
               tools,
               requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,
@@ -1566,10 +1617,14 @@ function createApp() {
         };
 
         try {
-          await invokeCliWithAccounts(req.principal, tracker, { backendType: 'cn' }, (cliOpts) =>
-            qoderCli.runQoderCnCliStream(buildCliOptions({
-              messages,
-              model,
+          await invokeCliWithAccounts(
+            req.principal,
+            tracker,
+            { backendType: 'cn', model, resolveModel: resolveModelForAccount },
+            (cliOpts) =>
+              qoderCli.runQoderCnCliStream(buildCliOptions({
+                messages,
+                model: cliOpts.model || model,
               tools,
               requestOptions,
               maxOutputTokens: requestOptions.maxOutputTokens || req.body.max_tokens,

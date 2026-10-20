@@ -297,14 +297,14 @@ x-api-key: <key>
 
 ### 响应示例
 
-**模型列表** `GET /v1/models`（外壳为标准 OpenAI 格式；条目完整透传 CLI 模型目录的原始 ModelInfo 字段（`value`/`displayName`/`priceFactor`/`isFree` 等），仅叠加 `id`/`object`/`created`/`owned_by` 标准四字段，不做改名包装）：
+**模型列表** `GET /v1/models`（外壳为标准 OpenAI 格式；条目完整透传 CLI 模型目录的原始 ModelInfo 字段（`value`/`displayName`/`priceFactor`/`isFree` 等），仅叠加 `id`/`object`/`created`/`owned_by` 标准四字段）。`id` 优先取 `displayName`（第三方客户端只显示 `id`，由此透出真实模型名），`value` 保留 CLI 内部代号原样；对话请求的 `model` 传 `displayName` 时网关会自动反查回 `value` 再调 CLI，传 `value` 亦兼容：
 
 ```json
 {
   "object": "list",
   "data": [
     {
-      "value": "Qwen3.8-Max",
+      "value": "Qmodel_38max",
       "displayName": "Qwen3.8-Max",
       "priceFactor": 1.0,
       "isFree": false,
