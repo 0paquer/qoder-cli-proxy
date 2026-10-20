@@ -76,11 +76,10 @@ const verifyTag = (s: Account['verifyStatus']) => {
   return <Tag>未验证</Tag>;
 };
 
-/** 模型下拉富标签：displayName 主行 + 描述/内部代号副行，右侧 credit 倍率（参考官方选择器）。 */
+/** 模型下拉标签：单行显示名称，免费为附加标签，右侧恒显 credit 倍率。 */
 const modelOptionLabel = (m: {
   value: string;
   displayName?: string;
-  description?: string;
   priceFactor?: number | null;
   isFree?: boolean;
 }) => {
@@ -88,13 +87,15 @@ const modelOptionLabel = (m: {
   const rate = m.priceFactor ?? null;
   return (
     <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className="truncate text-sm font-medium">{name}</div>
-        <div className="truncate text-xs text-gray-400">{m.description || m.value}</div>
-      </div>
-      <span className="shrink-0 text-xs text-gray-400">
-        {m.isFree ? '免费' : rate != null ? `${rate}x` : ''}
+      <span className="min-w-0 truncate text-sm">
+        {name}
+        {m.isFree ? (
+          <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-xs text-emerald-600">
+            免费
+          </span>
+        ) : null}
       </span>
+      <span className="shrink-0 text-xs text-gray-400">{rate != null ? `${rate}x` : ''}</span>
     </div>
   );
 };
