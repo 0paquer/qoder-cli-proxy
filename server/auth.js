@@ -4,7 +4,7 @@ const { AppError, anthropicError, openAiError } = require('./errors');
 
 // The proxy binds to 127.0.0.1, but that alone does not make it private:
 //
-//   * Any web page the user visits can POST to http://127.0.0.1:3000 from the
+//   * Any web page the user visits can POST to http://127.0.0.1:1300 from the
 //     browser. Loopback binding does not stop that — only an Origin check does.
 //   * A DNS-rebinding domain can resolve to 127.0.0.1 and reach the same
 //     socket, carrying its own name in the Host header.

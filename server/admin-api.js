@@ -636,7 +636,7 @@ function createAdminApi() {
         pid: process.pid,
         startedAt: new Date(Date.now() - uptimeSeconds * 1000).toISOString(),
         uptimeSeconds,
-        port: Number(cfg('PORT') || process.env.PORT || 3000),
+        port: Number(cfg('PORT') || process.env.PORT || 1300),
         bindHost: cfg('BIND_HOST') || process.env.BIND_HOST || '127.0.0.1',
         cliBackend: (process.env.CLI_BACKEND || 'cn').toLowerCase(),
         warmPool: require('./warm-pool').defaultPool.stats(),

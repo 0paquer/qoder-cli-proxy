@@ -102,7 +102,7 @@ const { isProxyAuthEnabled } = require('./auth');
 const { getCliBackend } = require('./cli-runtime');
 
 const HOST = db.getConfig('BIND_HOST') || process.env.BIND_HOST || '127.0.0.1';
-const PORT = Number(db.getConfig('PORT') || process.env.PORT || 3000);
+const PORT = Number(db.getConfig('PORT') || process.env.PORT || 1300);
 
 const app = createApp();
 

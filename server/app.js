@@ -1882,7 +1882,7 @@ function createApp() {
     const rawPort = req.body?.port;
     const newPort =
       rawPort === undefined || rawPort === null || rawPort === ''
-        ? Number(db.getConfig('PORT') || process.env.PORT || 3000)
+        ? Number(db.getConfig('PORT') || process.env.PORT || 1300)
         : Number(rawPort);
     const newBindHost = req.body?.bindHost || db.getConfig('BIND_HOST') || '127.0.0.1';
     const newQoderBaseUrl = req.body?.qoderBaseUrl || db.getConfig('QODERCN_BASE_URL') || '';

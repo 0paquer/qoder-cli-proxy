@@ -5,7 +5,7 @@
  */
 const target = process.env.QODER_PROXY_PORT
   ? `http://127.0.0.1:${process.env.QODER_PROXY_PORT}`
-  : 'http://127.0.0.1:13000';
+  : 'http://127.0.0.1:1300';
 
 export default {
   dev: {

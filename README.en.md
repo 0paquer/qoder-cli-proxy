@@ -90,7 +90,7 @@ Store tokens securely. Do not commit `.env` to Git, and do not enter your Token 
 npm start
 ```
 
-On Windows you can also double-click `start-proxy.cmd`. Default address: `http://127.0.0.1:3000` (`PORT` is configurable).
+On Windows you can also double-click `start-proxy.cmd`. Default address: `http://127.0.0.1:1300` (`PORT` is configurable).
 
 On first start the proxy creates `data/` (SQLite database + AES master key), runs migrations, and seeds a default admin account:
 
@@ -99,13 +99,13 @@ On first start the proxy creates `data/` (SQLite database + AES master key), run
 **Step 4: verify**
 
 ```powershell
-curl.exe http://127.0.0.1:3000/health
-curl.exe http://127.0.0.1:3000/v1/chat/completions `
+curl.exe http://127.0.0.1:1300/health
+curl.exe http://127.0.0.1:1300/v1/chat/completions `
   -H "Content-Type: application/json" `
   -d "{\"model\":\"qoder-cn\",\"messages\":[{\"role\":\"user\",\"content\":\"reply OK\"}]}"
 ```
 
-A model reply means the chain works. The admin console is at `http://127.0.0.1:3000/ui` (`.\start-ui.cmd` opens it in your browser).
+A model reply means the chain works. The admin console is at `http://127.0.0.1:1300/ui` (`.\start-ui.cmd` opens it in your browser).
 
 ## Tutorial: From Empty Database to First Real Conversation
 
@@ -113,7 +113,7 @@ Quick Start gets the service running; this section walks you the rest of the way
 
 ### Step 5: log in and change the default password
 
-1. Open `http://127.0.0.1:3000/ui` and log in with `admin` / `admin123`
+1. Open `http://127.0.0.1:1300/ui` and log in with `admin` / `admin123`
 2. First login **forces** a password-change dialog: at least 8 characters, different from the default — it cannot be skipped
 3. Until the password is changed, every admin API except change-password/logout/session-info returns `403 default_password`
 
@@ -137,7 +137,7 @@ See the next section, Local Client Adaptation: OpenAI-compatible clients just ne
 
 ### OpenAI-Compatible Interface
 
-- Base URL: `http://127.0.0.1:3000/v1`
+- Base URL: `http://127.0.0.1:1300/v1`
 - API Key: a `qk-` key issued in the admin console (Users & Keys); while zero keys exist, any placeholder works (e.g. `not-used`)
 - Model: select from `/v1/models` or enter a model ID manually
 
@@ -146,7 +146,7 @@ Do not enter your Qoder Token into the client. Keep the Token only in this proje
 ### Anthropic-Compatible Interface
 
 ```powershell
-$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3000"
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:1300"
 $env:ANTHROPIC_AUTH_TOKEN = "your qk- key"   # any value while zero keys exist
 ```
 
@@ -164,7 +164,7 @@ If you have issued `qk-` keys, replace `not-used` in `opencode.json`'s `options.
 
 ## Admin Console
 
-Open `http://127.0.0.1:3000/ui` after starting. Login credentials live in the local SQLite database; a regular user with zero grants cannot call the gateway.
+Open `http://127.0.0.1:1300/ui` after starting. Login credentials live in the local SQLite database; a regular user with zero grants cannot call the gateway.
 
 | Page | Description |
 |------|-------------|
@@ -235,7 +235,7 @@ Or specify per request via `reasoning_effort`, `context_window`, and `max_tokens
 
 ### Other Environment Variables
 
-- `PORT` / `BIND_HOST`: listen port and address (default `127.0.0.1:3000`)
+- `PORT` / `BIND_HOST`: listen port and address (default `127.0.0.1:1300`)
 - `QODERCN_TIMEOUT_MS`: per-request timeout in milliseconds. Proxy prompts plus model queueing can take several minutes, so keep this generous (default 300000; `.env.example` suggests 600000)
 - `QODERCN_CLI_TOOLS`: the CLI's built-in tools are disabled by default (`--tools=` is appended) so the model answers directly instead of running file/shell loops in the proxy's own directory. Set to `1` to keep them
 - Warm pool: `QODER_WARM_POOL=0` disables it entirely; `QODER_WARM_POOL_SIZE` / `QODER_WARM_POOL_MAX_TOTAL` / `QODER_WARM_POOL_TTL_MS` / `QODER_WARM_POOL_READY_MS` tune size, cap, TTL, and the maturity threshold (see `.env.example`)

@@ -15,11 +15,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-netstat -ano | findstr /R /C:":3000 .*LISTENING" >nul 2>nul
+netstat -ano | findstr /R /C:":1300 .*LISTENING" >nul 2>nul
 if not errorlevel 1 goto :port_busy
 goto :port_ok
 :port_busy
-echo [WARN] Port 3000 is already in use.
+echo [WARN] Port 1300 is already in use.
 echo The proxy may already be running. Close the existing window first.
 echo.
 pause
@@ -33,18 +33,18 @@ echo.
 :env_ok
 
 echo Qoder accounts (with encrypted PATs) are managed in the admin console:
-echo   http://127.0.0.1:3000/ui/accounts
+echo   http://127.0.0.1:1300/ui/accounts
 echo.
 
 echo Proxy will listen on:
-echo   http://127.0.0.1:3000
+echo   http://127.0.0.1:1300
 echo Keep this service local. Do not bind to 0.0.0.0 or expose it publicly.
 echo.
 echo Endpoints:
-echo   GET  http://127.0.0.1:3000/health
-echo   GET  http://127.0.0.1:3000/v1/models
-echo   POST http://127.0.0.1:3000/v1/chat/completions
-echo   POST http://127.0.0.1:3000/v1/messages
+echo   GET  http://127.0.0.1:1300/health
+echo   GET  http://127.0.0.1:1300/v1/models
+echo   POST http://127.0.0.1:1300/v1/chat/completions
+echo   POST http://127.0.0.1:1300/v1/messages
 echo.
 
 npm.cmd start

@@ -89,7 +89,7 @@ CLI_BACKEND=cn
 npm start
 ```
 
-Windows 也可以双击 `start-proxy.cmd`。默认地址 `http://127.0.0.1:3000`（`PORT` 可改）。
+Windows 也可以双击 `start-proxy.cmd`。默认地址 `http://127.0.0.1:1300`（`PORT` 可改）。
 
 首次启动会自动创建 `data/` 目录（SQLite 数据库 + AES 主密钥）并执行建表迁移，同时创建默认管理员账号：
 
@@ -98,13 +98,13 @@ Windows 也可以双击 `start-proxy.cmd`。默认地址 `http://127.0.0.1:3000`
 **第 4 步：验证**
 
 ```powershell
-curl.exe http://127.0.0.1:3000/health
-curl.exe http://127.0.0.1:3000/v1/chat/completions `
+curl.exe http://127.0.0.1:1300/health
+curl.exe http://127.0.0.1:1300/v1/chat/completions `
   -H "Content-Type: application/json" `
   -d "{\"model\":\"qoder-cn\",\"messages\":[{\"role\":\"user\",\"content\":\"reply OK\"}]}"
 ```
 
-看到模型回复即链路打通。管理控制台在 `http://127.0.0.1:3000/ui`（快捷启动 `.\start-ui.cmd` 自动打开浏览器）。
+看到模型回复即链路打通。管理控制台在 `http://127.0.0.1:1300/ui`（快捷启动 `.\start-ui.cmd` 自动打开浏览器）。
 
 ## 使用教程：从零到第一次真实对话
 
@@ -112,7 +112,7 @@ curl.exe http://127.0.0.1:3000/v1/chat/completions `
 
 ### 第 5 步：登录控制台并修改默认密码
 
-1. 打开 `http://127.0.0.1:3000/ui`，用 `admin` / `admin123` 登录
+1. 打开 `http://127.0.0.1:1300/ui`，用 `admin` / `admin123` 登录
 2. 首次登录会**强制弹出**「修改初始密码」：至少 8 位，且不能与默认密码相同，无法跳过
 3. 未改密码前，除改密/登出/会话信息外的所有管理接口一律返回 `403 default_password`
 
@@ -136,7 +136,7 @@ curl.exe http://127.0.0.1:3000/v1/chat/completions `
 
 ### OpenAI 兼容接口
 
-- Base URL：`http://127.0.0.1:3000/v1`
+- Base URL：`http://127.0.0.1:1300/v1`
 - API Key：填写管理台「用户密钥」签发的 `qk-` 密钥；一个密钥都不存在时网关对本机开放，可填任意占位值（如 `not-used`）
 - Model：从 `/v1/models` 返回列表选择，或手动输入模型 ID
 
@@ -145,7 +145,7 @@ curl.exe http://127.0.0.1:3000/v1/chat/completions `
 ### Anthropic 兼容接口
 
 ```powershell
-$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3000"
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:1300"
 $env:ANTHROPIC_AUTH_TOKEN = "你的 qk- 密钥"   # 一个密钥都不存在时填任意值
 ```
 
@@ -163,7 +163,7 @@ opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
 
 ## 管理控制台
 
-启动后访问 `http://127.0.0.1:3000/ui`。登录凭据保存在本机 SQLite 中；未被授权任何账号的普通用户不可调用网关。
+启动后访问 `http://127.0.0.1:1300/ui`。登录凭据保存在本机 SQLite 中；未被授权任何账号的普通用户不可调用网关。
 
 | 页面 | 说明 |
 |-----|------|
@@ -236,7 +236,7 @@ $env:QODERCN_MAX_OUTPUT_TOKENS = "4096"
 
 ### 其他环境变量
 
-- `PORT` / `BIND_HOST`：监听端口与地址（默认 `127.0.0.1:3000`）
+- `PORT` / `BIND_HOST`：监听端口与地址（默认 `127.0.0.1:1300`）
 - `QODERCN_TIMEOUT_MS`：单次请求超时（毫秒）。代理提示词 + 模型排队可能耗时数分钟，建议保持较大值（默认 300000，`.env.example` 示例为 600000）
 - `QODERCN_CLI_TOOLS`：默认禁用 CLI 内置工具（追加 `--tools=`），让模型直接回答而不是在代理目录里跑文件/shell 循环。设为 `1` 可恢复
 - 预热池：`QODER_WARM_POOL=0` 整体关闭；`QODER_WARM_POOL_SIZE` / `QODER_WARM_POOL_MAX_TOTAL` / `QODER_WARM_POOL_TTL_MS` / `QODER_WARM_POOL_READY_MS` 调节池大小、总量、回收与成熟门槛（详见 `.env.example`）
