@@ -1026,9 +1026,10 @@ function createApp() {
   };
 
   /**
-   * 模型名解析：/v1/models 的 id 保留 CLI 内部代号（OpenAI 标准客户端
-   * 直发即可调用），value/displayName 填正式名称。客户端回传正式名称时
-   * 按账号目录反查回内部代号再调 CLI；直接传内部代号亦兼容（原样返回）。
+   * 模型名解析：/v1/models 的 id/value/displayName 为模型显示名称，
+   * modelId 为 CLI 内部代号。客户端回传显示名称（或内部代号）时按账号
+   * 目录反查，统一换回内部代号再调 CLI；命中内部代号不命中显示名即原样
+   * 返回，两种传法都兼容。
    */
   async function resolveModelForAccount(account, requested) {
     const name = String(requested || '').trim();
@@ -1066,17 +1067,18 @@ function createApp() {
           for (const m of item.value) {
             if (!m || typeof m !== 'object') continue;
             // 归一化条目仅有 id（内部代号）/ name（正式名称）/ raw（原始
-            // ModelInfo）：id 保留内部代号供 OpenAI 标准客户端直发调用，
-            // value/displayName 统一填正式名称（部分客户端按 value 显示）。
+            // ModelInfo）：id/value/displayName 统一填显示名称（客户端读 id
+            // 展示），modelId = CLI 内部代号（对话交互字段，反查后调 CLI）。
             const code = String(m.id ?? '').trim();
             const official = String(m.name ?? '').trim();
             if (!code || seen.has(code)) continue;
             seen.add(code);
             data.push({
               ...(m.raw && typeof m.raw === 'object' ? m.raw : {}),
+              modelId: code,
               value: official || code,
               displayName: official || code,
-              id: code,
+              id: official || code,
               object: 'model',
               created: 0,
               owned_by: 'qodercn',

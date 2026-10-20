@@ -319,8 +319,9 @@ function createAdminApi() {
       const baseUrl = account.baseUrl || undefined;
       const backendType = account.backendType || 'cn';
       const catalog = await qoderCli.loadModelCatalog({ token: pat, baseUrl, backendType, force: true });
-      // 字段语义与 /v1/models 统一：id = CLI 内部代号（直发即可调用），
-      // value/displayName = 模型正式名称；其余原始 ModelInfo 字段原样透传。
+      // 字段语义与 /v1/models 统一：id/value/displayName = 模型显示名称
+      // （客户端读 id 展示），modelId = CLI 内部代号（对话交互字段）；
+      // 其余原始 ModelInfo 字段原样透传。
       const models = (catalog.models || [])
         .filter((m) => m && typeof m === 'object')
         .map((m) => {
@@ -329,7 +330,13 @@ function createAdminApi() {
           const official =
             String(m.name ?? '').trim() || String(raw?.displayName ?? raw?.value ?? '').trim();
           if (!code) return null;
-          return { ...(raw || {}), value: official || code, displayName: official || code, id: code };
+          return {
+            ...(raw || {}),
+            modelId: code,
+            value: official || code,
+            displayName: official || code,
+            id: official || code,
+          };
         })
         .filter(Boolean);
       const ok = models.length > 0;

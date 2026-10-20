@@ -296,7 +296,7 @@ x-api-key: <key>
 
 ### Response Examples
 
-**Model list** `GET /v1/models` (standard OpenAI shell; each entry spreads the CLI model catalog's raw ModelInfo fields (`priceFactor`/`isFree`/...) verbatim, with only the four standard fields (`id`/`object`/`created`/`owned_by`) added). Field semantics: `id` = the CLI internal code (OpenAI standard — clients send it as-is and calls just work), while `value`/`displayName` = the human-friendly model name (some clients display by `value`); when a chat request's `model` carries the friendly name, the gateway resolves it back to the internal code automatically — passing the code directly still works:
+**Model list** `GET /v1/models` (standard OpenAI shell; each entry spreads the CLI model catalog's raw ModelInfo fields (`priceFactor`/`isFree`/...) verbatim, with only the four standard fields (`id`/`object`/`created`/`owned_by`) added). Field semantics: `id`/`value`/`displayName` = the model display name (third-party clients read `id` for display), `modelId` = the CLI internal code (the field used to talk to the CLI); a chat request's `model` accepts either — the gateway resolves both back to the internal code via the catalog before calling the CLI:
 
 ```json
 {
@@ -305,12 +305,13 @@ x-api-key: <key>
     {
       "value": "Qwen3.8-Max",
       "displayName": "Qwen3.8-Max",
+      "modelId": "Qmodel_38max",
       "priceFactor": 1.0,
       "isFree": false,
       "isReasoning": true,
       "isDefault": false,
       "isEnabled": true,
-      "id": "Qmodel_38max",
+      "id": "Qwen3.8-Max",
       "object": "model",
       "created": 0,
       "owned_by": "qodercn"

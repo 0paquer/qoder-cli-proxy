@@ -76,9 +76,9 @@ const verifyTag = (s: Account['verifyStatus']) => {
   return <Tag>未验证</Tag>;
 };
 
-/** 模型内部代号：新语义取 id，兼容旧条目 value/modelId，静态表取 id。 */
-const codeOf = (m: { id?: string; value?: string; modelId?: unknown }) =>
-  String(m.id ?? m.value ?? m.modelId ?? '').trim();
+/** 模型内部代号（与 CLI 交互用）：优先 modelId，兼容旧条目 value，静态表取 id。 */
+const codeOf = (m: { modelId?: unknown; id?: string; value?: string }) =>
+  String(m.modelId ?? '').trim() || String(m.id ?? m.value ?? '').trim();
 
 /** 模型下拉标签：单行显示名称，免费为附加标签，右侧恒显 credit 倍率。 */
 const modelOptionLabel = (m: {
@@ -128,6 +128,7 @@ const PlaygroundPage: React.FC = () => {
   const [models, setModels] = useState<
     {
       id?: string;
+      modelId?: string;
       value: string;
       name?: string;
       displayName?: string;
@@ -402,7 +403,7 @@ const PlaygroundPage: React.FC = () => {
               options={models.map((m) => ({
                 value: codeOf(m),
                 label: modelOptionLabel(m),
-                searchText: `${m.displayName ?? ''} ${m.id ?? ''} ${m.value}`.toLowerCase(),
+                searchText: `${m.displayName ?? ''} ${m.modelId ?? ''} ${m.value}`.toLowerCase(),
               }))}
             />
           </div>

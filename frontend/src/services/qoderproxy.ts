@@ -291,9 +291,10 @@ export interface ChatTurn {
 }
 
 /** 账号目录条目：CLI 原始 ModelInfo 原样透传（value/displayName/priceFactor/isFree/...），
- * 并与 /v1/models 统一语义：id = CLI 内部代号（直发即可调用），value/displayName = 正式名称。 */
+ * 并与 /v1/models 统一语义：id/value/displayName = 模型显示名称，modelId = CLI 内部代号。 */
 export interface RawModelInfo {
   id?: string;
+  modelId?: string;
   value: string;
   displayName?: string;
   description?: string;

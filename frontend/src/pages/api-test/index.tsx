@@ -92,10 +92,10 @@ const ApiTestPage: React.FC = () => {
           setModelsNote(`加载失败：HTTP ${r.status} ${d?.error?.message ?? ''}`.trim());
           return;
         }
-        // 与 /v1/models 统一语义：id = CLI 内部代号（直发即可调用），
-        // displayName/name = 正式名称（显示用）；静态兜底为 id/name/rate/is_free
+        // 与 /v1/models 统一语义：id = 模型显示名称，modelId = CLI 内部代号
+        // （发送与 CLI 交互用 modelId）；静态兜底无 modelId 则用 id/name
         const list: ModelOption[] = (d?.data ?? []).map((m: any) => ({
-          id: String(m.id ?? m.value),
+          id: String(m.modelId ?? m.id ?? m.value),
           name: String(m.displayName ?? m.name ?? m.value ?? m.id),
           rate:
             typeof m.priceFactor === 'number'
