@@ -296,21 +296,24 @@ x-api-key: <key>
 
 ### Response Examples
 
-**Model list** `GET /v1/models` (standard OpenAI shell; `id`/`name` pass through the CLI model catalog's `value`/`displayName` verbatim — no normalization; `rate`/`is_free`/`is_default` are raw catalog fields):
+**Model list** `GET /v1/models` (standard OpenAI shell; each entry spreads the CLI model catalog's raw ModelInfo fields (`value`/`displayName`/`priceFactor`/`isFree`/...) verbatim, with only the four standard fields (`id`/`object`/`created`/`owned_by`) added — no renaming or repackaging):
 
 ```json
 {
   "object": "list",
   "data": [
     {
-      "id": "qwen3.8-max",
+      "value": "Qwen3.8-Max",
+      "displayName": "Qwen3.8-Max",
+      "priceFactor": 1.0,
+      "isFree": false,
+      "isReasoning": true,
+      "isDefault": false,
+      "isEnabled": true,
+      "id": "Qwen3.8-Max",
       "object": "model",
       "created": 0,
-      "owned_by": "qodercn",
-      "name": "Qwen3.8 Max",
-      "capabilities": { "reasoning": true },
-      "rate": 1.0,
-      "is_free": false
+      "owned_by": "qodercn"
     }
   ]
 }

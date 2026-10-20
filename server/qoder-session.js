@@ -775,6 +775,7 @@ async function loadModelCatalog({ token, baseUrl, backendType, timeoutMs } = {})
         isFree: Boolean(m.isFree),
         isReasoning: Boolean(m.isReasoning),
         isDefault: Boolean(m.isDefault),
+        raw: m, // CLI 原始 ModelInfo 原样保留，供 /v1/models 完整透传
       }))
       .filter((m) => m.id);
     if (models.length === 0) throw new AppError(502, 'upstream_error', 'Model catalog returned no models.');

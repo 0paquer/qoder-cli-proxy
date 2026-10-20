@@ -1020,8 +1020,8 @@ function createApp() {
       const accounts = accountsForPrincipal(principal).filter((a) => Boolean(a.enabled));
       if (accounts.length > 0) {
         const settled = await Promise.allSettled(accounts.map(loadAccountModelsCached));
-        // 原样透传：id/name 直接用 CLI 模型目录返回的 value/displayName，
-        // 不做大小写归一或注册表改名；rate/isFree 等为目录原始字段附加输出。
+        // 完整透传：条目展开 CLI 原始 ModelInfo 的全部字段（value/displayName/
+        // priceFactor/isFree/...），仅叠加 OpenAI 标准外壳四字段，不做改名包装。
         const seen = new Set();
         const data = [];
         for (const item of settled) {
@@ -1032,15 +1032,11 @@ function createApp() {
             if (!id || seen.has(id)) continue;
             seen.add(id);
             data.push({
+              ...(m.raw && typeof m.raw === 'object' ? m.raw : {}),
               id,
               object: 'model',
               created: 0,
               owned_by: 'qodercn',
-              ...(m.name ? { name: String(m.name) } : {}),
-              ...(Number.isFinite(Number(m.rate)) ? { rate: Number(m.rate) } : {}),
-              ...(m.isFree ? { is_free: true } : {}),
-              capabilities: { reasoning: Boolean(m.isReasoning) },
-              ...(m.isDefault ? { is_default: true } : {}),
             });
           }
         }
