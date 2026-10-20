@@ -727,11 +727,13 @@ const CATALOG_CACHE_FAIL_MS = 60 * 1000;
 
 const catalogCaches = new Map(); // tokenFp → { at, ok, models }
 
-async function loadModelCatalog({ token, baseUrl, backendType, timeoutMs } = {}) {
+async function loadModelCatalog({ token, baseUrl, backendType, timeoutMs, force } = {}) {
   const backend = cli.getCliBackend(backendType);
   const effectiveToken = requireToken(backend, token);
   const cacheKey = crypto.createHash('sha256').update(`${backendType || 'cn'}|${effectiveToken}`).digest('hex').slice(0, 24);
-  const hit = catalogCaches.get(cacheKey);
+  // force=true（管理台测试对话）：跳过缓存读取，每次真实查询；查询结果仍写回
+  // 缓存供网关热路径使用。
+  const hit = force ? null : catalogCaches.get(cacheKey);
   if (hit && Date.now() - hit.at < (hit.ok ? CATALOG_CACHE_OK_MS : CATALOG_CACHE_FAIL_MS)) {
     return { ok: hit.ok, models: hit.models };
   }

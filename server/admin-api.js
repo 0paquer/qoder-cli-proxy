@@ -296,9 +296,6 @@ function createAdminApi() {
   });
 
   // ── Playground（测试对话）───────────────────────────────────────────────────
-  // 按账号缓存真实模型列表（与 /v1/models 同策略：成功 60s / 失败 15s）
-  const accountModelsCache = new Map();
-
   const staticModels = () => MODELS.map(({ id, name }) => ({ id, name }));
 
   /**
@@ -306,6 +303,8 @@ function createAdminApi() {
    * GET /admin/models?accountId= → 该账号的真实模型（SDK daemon 模型目录，
    *                                 自带 credit 倍率 rate，零 token）
    *                                 失败/无 PAT 时回退静态表（source 标记来源）
+   * 测试对话专用：永远不使用缓存（force），每次真实查询，确保下拉实时反映
+   * 服务端模型目录变化。
    */
   router.get('/models', adminGuard, async (req, res) => {
     const accountId = Number(req.query.accountId);
@@ -314,21 +313,12 @@ function createAdminApi() {
     const account = accountsStore.getAccount(accountId);
     if (!account) return notFound(res, 'Account not found');
 
-    const hit = accountModelsCache.get(accountId);
-    if (hit && Date.now() - hit.at < (hit.ok ? 60000 : 15000)) {
-      return res.json(
-        hit.ok
-          ? { ok: true, source: 'account', models: hit.models }
-          : { ok: true, source: 'static', models: staticModels() }
-      );
-    }
-
     try {
       const pat = accountsStore.getPat(accountId);
       if (!pat) throw new AppError(400, 'invalid_request', 'Account has no PAT stored');
       const baseUrl = account.baseUrl || undefined;
       const backendType = account.backendType || 'cn';
-      const catalog = await qoderCli.loadModelCatalog({ token: pat, baseUrl, backendType });
+      const catalog = await qoderCli.loadModelCatalog({ token: pat, baseUrl, backendType, force: true });
       // 字段语义与 /v1/models 统一：id = CLI 内部代号（直发即可调用），
       // value/displayName = 模型正式名称；其余原始 ModelInfo 字段原样透传。
       const models = (catalog.models || [])
@@ -343,14 +333,12 @@ function createAdminApi() {
         })
         .filter(Boolean);
       const ok = models.length > 0;
-      accountModelsCache.set(accountId, { at: Date.now(), ok, models });
       return res.json(
         ok
           ? { ok: true, source: 'account', models }
           : { ok: true, source: 'static', models: staticModels() }
       );
     } catch (error) {
-      accountModelsCache.set(accountId, { at: Date.now(), ok: false, models: [] });
       return fail(res, error);
     }
   });
