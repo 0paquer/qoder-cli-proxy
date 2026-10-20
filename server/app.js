@@ -18,7 +18,7 @@ const db = require('./db');
 const balancer = require('./balancer');
 const accountsStore = require('./stores/accounts');
 const usageStore = require('./stores/usage');
-const { DEFAULT_MODEL_ID, MODELS, normalizeModelEntry, buildRateIndex, attachRate } = require('./models');
+const { DEFAULT_MODEL_ID, MODELS } = require('./models');
 const {
   anthropicToOpenAiMessages,
   createAnthropicMessage,
@@ -1020,32 +1020,27 @@ function createApp() {
       const accounts = accountsForPrincipal(principal).filter((a) => Boolean(a.enabled));
       if (accounts.length > 0) {
         const settled = await Promise.allSettled(accounts.map(loadAccountModelsCached));
-        // 倍率索引：模型目录自带 rate，先并入索引再构建条目（目录并集，尽力而为）。
-        const rateIndex = new Map();
-        for (const item of settled) {
-          if (item.status !== 'fulfilled' || !Array.isArray(item.value)) continue;
-          for (const [k, v] of buildRateIndex(item.value)) if (!rateIndex.has(k)) rateIndex.set(k, v);
-        }
+        // 原样透传：id/name 直接用 CLI 模型目录返回的 value/displayName，
+        // 不做大小写归一或注册表改名；rate/isFree 等为目录原始字段附加输出。
         const seen = new Set();
         const data = [];
         for (const item of settled) {
           if (item.status !== 'fulfilled' || !Array.isArray(item.value)) continue;
           for (const m of item.value) {
-            const norm = normalizeModelEntry(m);
-            if (!norm || seen.has(norm.id)) continue;
-            seen.add(norm.id);
-            const raw = norm.raw || {};
-            const entry = attachRate({ id: norm.id, name: raw.name || raw.displayName || norm.id }, rateIndex);
+            if (!m || typeof m !== 'object') continue;
+            const id = String(m.id ?? m.value ?? '').trim();
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
             data.push({
-              id: entry.id,
+              id,
               object: 'model',
               created: 0,
               owned_by: 'qodercn',
-              name: entry.name,
-              capabilities: { reasoning: Boolean(raw.reasoning || raw.isReasoning) },
-              ...(entry.rate != null ? { rate: entry.rate } : {}),
-              ...(entry.isFree ? { is_free: true } : {}),
-              ...(raw.effortAlias ? { effort_alias: true } : {}),
+              ...(m.name ? { name: String(m.name) } : {}),
+              ...(Number.isFinite(Number(m.rate)) ? { rate: Number(m.rate) } : {}),
+              ...(m.isFree ? { is_free: true } : {}),
+              capabilities: { reasoning: Boolean(m.isReasoning) },
+              ...(m.isDefault ? { is_default: true } : {}),
             });
           }
         }

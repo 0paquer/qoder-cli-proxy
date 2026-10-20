@@ -297,18 +297,18 @@ x-api-key: <key>
 
 ### 响应示例
 
-**模型列表** `GET /v1/models`：
+**模型列表** `GET /v1/models`（外壳为标准 OpenAI 格式；`id`/`name` 原样透传 CLI 模型目录的 `value`/`displayName`，不做归一化，`rate`/`is_free`/`is_default` 为目录原始字段附加输出）：
 
 ```json
 {
   "object": "list",
   "data": [
     {
-      "id": "qwen3.8-max",
+      "id": "Qwen3.8-Max",
       "object": "model",
       "created": 0,
       "owned_by": "qodercn",
-      "name": "Qwen3.8 Max",
+      "name": "Qwen3.8-Max",
       "capabilities": { "reasoning": true },
       "rate": 1.0,
       "is_free": false

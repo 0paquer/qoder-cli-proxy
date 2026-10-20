@@ -296,7 +296,7 @@ x-api-key: <key>
 
 ### Response Examples
 
-**Model list** `GET /v1/models`:
+**Model list** `GET /v1/models` (standard OpenAI shell; `id`/`name` pass through the CLI model catalog's `value`/`displayName` verbatim — no normalization; `rate`/`is_free`/`is_default` are raw catalog fields):
 
 ```json
 {
