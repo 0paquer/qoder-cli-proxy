@@ -37,6 +37,7 @@ const {
 } = require('./tool-parser');
 const path = require('path');
 const { trackRequest, getUsage, resetUsage, saveUsage, estimateTokens, extractTextFromMessages } = require('./usage');
+const { buildOpenApi } = require('./openapi');
 const { executeToolCall } = require('./tools-executor');
 const { createAdminApi } = require('./admin-api');
 
@@ -1767,6 +1768,14 @@ function createApp() {
   app.post('/usage/reset-local', (_req, res) => {
     resetUsage();
     res.json({ ok: true });
+  });
+
+  // --- OpenAPI docs: auto-generated spec + Swagger UI (static page) ---
+  app.get('/openapi.json', (_req, res) => {
+    res.json(buildOpenApi(app));
+  });
+  app.get('/ui/swagger.html', (_req, res) => {
+    res.sendFile(path.join(__dirname, 'swagger.html'));
   });
 
   // --- Static Web Console at /ui ---
