@@ -17,10 +17,11 @@
  * （账号 + 命令行参数 + 环境）补一个热进程，后续同指纹请求直接取用。
  *
  * 空闲保温（keepalive）：学习式补位只在「请求发生时」触发，指纹超过 TTL
- * 无请求就会回冷。保温巡检按间隔扫描已知指纹，发现池内无热进程即补位，
- * 让「短暂闲置后的首个请求」依然是热路径；距最后请求超过保温窗口的指纹
- * 停止补位（账号停用/长期闲置时释放内存）。启动预热见 admin-api.js
- * 的 prewarmChatPools（解决「服务启动后的首个请求」）。
+ * 无请求就会回冷。保温巡检按间隔扫描已知指纹，发现池内无热进程即补位；
+ * TTL 销毁热进程时经 removeEntry 钩子即时重建（30s 冷却防风暴）——默认
+ * 保温窗口为 0（永不过期），指纹一旦建立即永久保温，长时间闲置后的首个
+ * 请求依然是热路径。设正数窗口则超窗停保释放内存。启动预热见
+ * admin-api.js 的 prewarmChatPools（解决「服务启动后的首个请求」）。
  */
 
 const crypto = require('crypto');
@@ -30,11 +31,11 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 function poolSize() {
-  return Math.max(0, Number(process.env.QODER_WARM_POOL_SIZE || 1));
+  return Math.max(0, Number(process.env.QODER_WARM_POOL_SIZE || 2));
 }
 
 function maxTotal() {
-  return Math.max(0, Number(process.env.QODER_WARM_POOL_MAX_TOTAL || 3));
+  return Math.max(0, Number(process.env.QODER_WARM_POOL_MAX_TOTAL || 5));
 }
 
 function ttlMs() {
@@ -59,9 +60,13 @@ function keepaliveMs() {
   return Math.max(0, Number(process.env.QODER_WARM_POOL_KEEPALIVE_MS || 60_000));
 }
 
-/** 保温窗口（毫秒）：距最后一次请求超过该时长的指纹停止保温。默认 4 小时。 */
+/**
+ * 保温窗口（毫秒）：距最后一次请求超过该时长的指纹停止保温。
+ * 默认 0 = 永不过期——TTL 销毁热进程的同时即时重建，指纹永久保温，
+ * 长时间闲置后的首个请求依然是热路径；设为正数则超窗停保释放内存。
+ */
 function keepaliveWindowMs() {
-  return Math.max(0, Number(process.env.QODER_WARM_POOL_KEEPALIVE_WINDOW_MS || 4 * 60 * 60_000));
+  return Math.max(0, Number(process.env.QODER_WARM_POOL_KEEPALIVE_WINDOW_MS || 0));
 }
 
 /** env 中影响 CLI 行为的稳定部分（排除每请求变化的 auth payload 路径）。 */
@@ -249,7 +254,7 @@ function createWarmPool({
     if (stopped || cfg.keepalive <= 0) return;
     const tracked = specs.get(key);
     if (!tracked) return;
-    if (Date.now() - tracked.lastSeen > cfg.keepaliveWindow) {
+    if (cfg.keepaliveWindow > 0 && Date.now() - tracked.lastSeen > cfg.keepaliveWindow) {
       specs.delete(key);
       instantRefill.delete(key);
       return;
@@ -268,7 +273,7 @@ function createWarmPool({
           if (stopped || !isEnabled()) return;
           const now = Date.now();
           for (const [key, tracked] of specs) {
-            if (now - tracked.lastSeen > cfg.keepaliveWindow) {
+            if (cfg.keepaliveWindow > 0 && now - tracked.lastSeen > cfg.keepaliveWindow) {
               specs.delete(key);
               instantRefill.delete(key);
               continue;

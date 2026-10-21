@@ -162,6 +162,15 @@ test('warm pool: enabled by default, disabled via QODER_WARM_POOL', () => {
   }
 });
 
+test('warm pool: defaults are SIZE=2, MAX_TOTAL=5 and permanent keepalive window', () => {
+  const pool = createWarmPool({ spawnFn: () => makeFakeChild() });
+  const s = pool.stats();
+  assert.equal(s.size, 2, 'per-fingerprint size defaults to 2');
+  assert.equal(s.maxTotal, 5, 'total idle cap defaults to 5');
+  assert.equal(s.keepaliveWindowMs, 0, 'window 0 = never expire, TTL destroy rebuilds forever');
+  pool.shutdown();
+});
+
 test('warm pool: keepalive respawns lost idle processes within window', async () => {
   let spawned = 0;
   let child;
