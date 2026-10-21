@@ -13,6 +13,8 @@ delete process.env.PROXY_API_KEY; // deterministic: gateway starts open
 require('../server/migrations').runMigrations(require('../server/db').db);
 
 const qoderCli = require('../server/qoder-session');
+const warmPool = require('../server/warm-pool');
+const daemonPool = require('../server/daemon-pool');
 const { createApp, resetLoginRateLimit } = require('../server/app');
 const { AppError } = require('../server/errors');
 const accountsStore = require('../server/stores/accounts');
@@ -1120,5 +1122,219 @@ test('warm pool admin: list hides tokens, prewarm/evict/clear routes answer', as
     assert.equal(typeof cleared.killed, 'number');
   } finally {
     server.close();
+  }
+});
+
+test('warm pool config: params validate, apply to runtime env immediately', async () => {
+  const POOL_ENV_KEYS = [
+    'QODER_WARM_POOL_SIZE',
+    'QODER_WARM_POOL_MAX_TOTAL',
+    'QODER_WARM_POOL_TTL_MS',
+    'QODER_WARM_POOL_READY_MS',
+    'QODER_WARM_POOL_KEEPALIVE_MS',
+    'QODER_WARM_POOL_KEEPALIVE_WINDOW_MS',
+  ];
+  const savedEnv = Object.fromEntries(POOL_ENV_KEYS.map((k) => [k, process.env[k]]));
+
+  const app = createApp();
+  const { server, baseUrl } = await listen(app);
+  try {
+    const headers = await setupAdmin(app, baseUrl);
+
+    // 越界值：size 为负数 → 400
+    const negative = await authedFetch(baseUrl, headers, '/admin/warm-pool/config', {
+      method: 'POST',
+      body: JSON.stringify({ size: -1 }),
+    });
+    assert.equal(negative.status, 400);
+
+    // 空提交 → 400
+    const empty = await authedFetch(baseUrl, headers, '/admin/warm-pool/config', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert.equal(empty.status, 400);
+
+    // 合法提交：运行时 env 立即生效，stats 返回新值
+    const okRes = await authedFetch(baseUrl, headers, '/admin/warm-pool/config', {
+      method: 'POST',
+      body: JSON.stringify({
+        size: 3,
+        maxTotal: 7,
+        ttlMs: 900_000,
+        keepaliveWindowMs: 0,
+      }),
+    });
+    assert.equal(okRes.status, 200);
+    const okBody = await okRes.json();
+    assert.equal(okBody.ok, true);
+    assert.equal(okBody.stats.size, 3);
+    assert.equal(okBody.stats.maxTotal, 7);
+    assert.equal(okBody.applied.size, 3);
+    assert.equal(process.env.QODER_WARM_POOL_SIZE, '3');
+    assert.equal(process.env.QODER_WARM_POOL_MAX_TOTAL, '7');
+    assert.equal(process.env.QODER_WARM_POOL_TTL_MS, '900000');
+
+    // GET /warm-pool 复核统计已刷新
+    const pool = await (await authedFetch(baseUrl, headers, '/admin/warm-pool')).json();
+    assert.equal(pool.ok, true);
+    assert.equal(pool.stats.size, 3);
+    assert.equal(pool.stats.maxTotal, 7);
+    assert.equal(pool.stats.ttlMs, 900_000);
+  } finally {
+    server.close();
+    for (const k of POOL_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    // 还原 env 后把 defaultPool 的 cfg 刷回去，避免影响后续用例。
+    warmPool.defaultPool.reconfigure();
+  }
+});
+
+test('daemon pool admin: stats hide tokens, config validates and applies, drop answers', async () => {
+  const DAEMON_ENV_KEYS = ['QODER_DAEMON_POOL', 'QODER_DAEMON_TTL_MS'];
+  const savedEnv = Object.fromEntries(DAEMON_ENV_KEYS.map((k) => [k, process.env[k]]));
+
+  const app = createApp();
+  const { server, baseUrl } = await listen(app);
+  try {
+    const headers = await setupAdmin(app, baseUrl);
+
+    // 结构：enabled/ttlMs/count 齐全，条目绝不回传 token
+    const list = await (await authedFetch(baseUrl, headers, '/admin/daemon-pool')).json();
+    assert.equal(list.ok, true);
+    assert.equal(typeof list.stats.enabled, 'boolean');
+    assert.equal(typeof list.stats.ttlMs, 'number');
+    assert.equal(list.stats.count, list.entries.length);
+    for (const row of list.entries) {
+      assert.equal(typeof row.key, 'string');
+      assert.equal('token' in row, false, 'daemon entries must never expose tokens');
+    }
+
+    // TTL 越界 → 400
+    const badTtl = await authedFetch(baseUrl, headers, '/admin/daemon-pool/config', {
+      method: 'POST',
+      body: JSON.stringify({ ttlMs: 999 }),
+    });
+    assert.equal(badTtl.status, 400);
+
+    // enabled 非布尔 → 400
+    const badEnabled = await authedFetch(baseUrl, headers, '/admin/daemon-pool/config', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: 'yes' }),
+    });
+    assert.equal(badEnabled.status, 400);
+
+    // 合法提交：运行时 env 立即生效，stats 回新值
+    const okRes = await authedFetch(baseUrl, headers, '/admin/daemon-pool/config', {
+      method: 'POST',
+      body: JSON.stringify({ ttlMs: 120_000 }),
+    });
+    assert.equal(okRes.status, 200);
+    const okBody = await okRes.json();
+    assert.equal(okBody.ok, true);
+    assert.equal(okBody.stats.ttlMs, 120_000);
+    assert.equal(okBody.applied.QODER_DAEMON_TTL_MS, '120000');
+    assert.equal(process.env.QODER_DAEMON_TTL_MS, '120000');
+
+    // GET 复核统计已刷新
+    const reList = await (await authedFetch(baseUrl, headers, '/admin/daemon-pool')).json();
+    assert.equal(reList.stats.ttlMs, 120_000);
+
+    // 手动回收：空池 drop 全部，返回数字
+    const dropped = await (
+      await authedFetch(baseUrl, headers, '/admin/daemon-pool/drop', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+    ).json();
+    assert.equal(dropped.ok, true);
+    assert.equal(typeof dropped.dropped, 'number');
+  } finally {
+    server.close();
+    for (const k of DAEMON_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    // 还原 env 后重排 TTL 定时器，避免影响后续用例。
+    daemonPool.reconfigure();
+  }
+});
+
+test('model defaults: validate, apply to runtime env immediately, clear with empty value', async () => {
+  const MODEL_ENV_KEYS = [
+    'QODERCN_REASONING_EFFORT',
+    'QODERCN_CONTEXT_WINDOW',
+    'QODERCN_MAX_OUTPUT_TOKENS',
+    'QODERCN_TIMEOUT_MS',
+  ];
+  const savedEnv = Object.fromEntries(MODEL_ENV_KEYS.map((k) => [k, process.env[k]]));
+
+  const app = createApp();
+  const { server, baseUrl } = await listen(app);
+  try {
+    const headers = await setupAdmin(app, baseUrl);
+
+    // 非法枚举 → 400
+    const badEffort = await authedFetch(baseUrl, headers, '/admin/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify({ reasoningEffort: 'ultra' }),
+    });
+    assert.equal(badEffort.status, 400);
+
+    // 越界数值 → 400
+    const badWindow = await authedFetch(baseUrl, headers, '/admin/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify({ contextWindow: 1 }),
+    });
+    assert.equal(badWindow.status, 400);
+
+    // 空提交 → 400
+    const empty = await authedFetch(baseUrl, headers, '/admin/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert.equal(empty.status, 400);
+
+    // 合法提交：运行时 env 立即生效
+    const okRes = await authedFetch(baseUrl, headers, '/admin/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify({
+        reasoningEffort: 'high',
+        contextWindow: 200_000,
+        timeoutMs: 600_000,
+      }),
+    });
+    assert.equal(okRes.status, 200);
+    const okBody = await okRes.json();
+    assert.equal(okBody.ok, true);
+    assert.equal(okBody.defaults.reasoningEffort, 'high');
+    assert.equal(process.env.QODERCN_REASONING_EFFORT, 'high');
+    assert.equal(process.env.QODERCN_CONTEXT_WINDOW, '200000');
+    assert.equal(process.env.QODERCN_TIMEOUT_MS, '600000');
+
+    // GET /runtime-defaults 复核
+    const defaults = await (await authedFetch(baseUrl, headers, '/admin/runtime-defaults')).json();
+    assert.equal(defaults.ok, true);
+    assert.equal(defaults.defaults.reasoningEffort, 'high');
+    assert.equal(defaults.defaults.contextWindow, 200_000);
+
+    // 空串清除：字段留空即写空值，读回为 null/默认
+    const cleared = await authedFetch(baseUrl, headers, '/admin/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify({ reasoningEffort: '', contextWindow: '' }),
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(process.env.QODERCN_REASONING_EFFORT, '');
+    const afterClear = await (await authedFetch(baseUrl, headers, '/admin/runtime-defaults')).json();
+    assert.equal(afterClear.defaults.reasoningEffort ?? null, null);
+    assert.equal(afterClear.defaults.contextWindow ?? null, null);
+  } finally {
+    server.close();
+    for (const k of MODEL_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
   }
 });

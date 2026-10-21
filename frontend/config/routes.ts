@@ -56,6 +56,13 @@ export default [
     component: './api-test',
   },
   {
+    name: '进程池',
+    icon: 'hdd',
+    path: '/pools',
+    component: './pools',
+    access: 'canAdmin',
+  },
+  {
     name: '系统日志',
     icon: 'fileText',
     path: '/logs',

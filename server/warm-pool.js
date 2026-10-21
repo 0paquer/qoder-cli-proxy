@@ -113,6 +113,18 @@ function createWarmPool({
     keepalive: Math.max(0, Number(keepaliveOpt != null ? keepaliveOpt : 0)),
     keepaliveWindow: Math.max(0, Number(keepaliveWindowOpt != null ? keepaliveWindowOpt : keepaliveWindowMs())),
   };
+
+  /** 重读环境变量刷新全部容量/巡检参数。仅 defaultPool 的管理接口调用
+   *  （测试注入的确定性配置会被环境变量覆盖，测试不应调用）。 */
+  function refreshCfg() {
+    cfg.size = Math.max(0, Number(poolSize()));
+    cfg.maxTotal = Math.max(0, Number(maxTotal()));
+    cfg.ttl = Math.max(50, Number(ttlMs()));
+    cfg.readyMs = Math.max(0, Number(readyMs()));
+    cfg.keepalive = Math.max(0, Number(keepaliveMs()));
+    cfg.keepaliveWindow = Math.max(0, Number(keepaliveWindowMs()));
+  }
+
   const doSpawn =
     spawnFn ||
     ((command, args, opts) => spawn(command, args, opts));
@@ -267,23 +279,32 @@ function createWarmPool({
 
   // 空闲保温巡检：对窗口内的已知指纹，池内无热进程（TTL 回收/进程早亡）
   // 即补位。容量仍受 size/maxTotal 约束；unref 不阻塞进程退出。
-  const keepaliveTimer =
-    cfg.keepalive > 0
-      ? setInterval(() => {
-          if (stopped || !isEnabled()) return;
-          const now = Date.now();
-          for (const [key, tracked] of specs) {
-            if (cfg.keepaliveWindow > 0 && now - tracked.lastSeen > cfg.keepaliveWindow) {
-              specs.delete(key);
-              instantRefill.delete(key);
-              continue;
-            }
-            const list = idle.get(key);
-            if (!list || list.length === 0) offerImpl(key, tracked.spec);
-          }
-        }, cfg.keepalive)
-      : null;
-  keepaliveTimer?.unref?.();
+  function keepaliveTick() {
+    if (stopped || !isEnabled()) return;
+    const now = Date.now();
+    for (const [key, tracked] of specs) {
+      if (cfg.keepaliveWindow > 0 && now - tracked.lastSeen > cfg.keepaliveWindow) {
+        specs.delete(key);
+        instantRefill.delete(key);
+        continue;
+      }
+      const list = idle.get(key);
+      if (!list || list.length === 0) offerImpl(key, tracked.spec);
+    }
+  }
+
+  // 巡检定时器按当前 cfg.keepalive 重建：运行时改参经 startKeepalive 生效。
+  let keepaliveTimer = null;
+  function startKeepalive() {
+    if (keepaliveTimer) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+    if (stopped || cfg.keepalive <= 0) return;
+    keepaliveTimer = setInterval(keepaliveTick, cfg.keepalive);
+    keepaliveTimer.unref?.();
+  }
+  startKeepalive();
 
   /** 杀掉某指纹的全部空闲进程。调用方须先删 spec，否则归零钩子会重建。
    *  返回杀掉的进程数。 */
@@ -308,6 +329,21 @@ function createWarmPool({
     let killed = 0;
     for (const key of Array.from(idle.keys())) killed += killIdleOfKey(key);
     return killed;
+  }
+
+  function buildStats() {
+    return {
+      enabled: isEnabled(),
+      keys: idle.size,
+      idle: totalIdle(),
+      size: cfg.size,
+      maxTotal: cfg.maxTotal,
+      ttlMs: cfg.ttl,
+      readyMs: cfg.readyMs,
+      keepaliveMs: cfg.keepalive,
+      keepaliveWindowMs: cfg.keepaliveWindow,
+      trackedSpecs: specs.size,
+    };
   }
 
   return {
@@ -344,18 +380,30 @@ function createWarmPool({
     },
 
     stats() {
-      return {
-        enabled: isEnabled(),
-        keys: idle.size,
-        idle: totalIdle(),
-        size: cfg.size,
-        maxTotal: cfg.maxTotal,
-        ttlMs: cfg.ttl,
-        readyMs: cfg.readyMs,
-        keepaliveMs: cfg.keepalive,
-        keepaliveWindowMs: cfg.keepaliveWindow,
-        trackedSpecs: specs.size,
-      };
+      return buildStats();
+    },
+
+    /** 运行时改参：重读环境变量刷新容量/巡检配置并立即按新容量补位。
+     *  缩小上限不立刻杀进程，随 TTL 回收逐步收敛；返回新统计。 */
+    reconfigure() {
+      if (stopped) return buildStats();
+      refreshCfg();
+      startKeepalive();
+      keepaliveTick(); // 立即应用窗口收缩（超窗指纹出表）并补位一轮
+      // 按新容量把各指纹填满（受 size/maxTotal 约束，guard 防异常自旋）
+      let spawned = 0;
+      for (const [key, tracked] of specs) {
+        for (let guard = 0; guard < 64; guard += 1) {
+          const before = (idle.get(key) || []).length;
+          if (before >= cfg.size || totalIdle() >= cfg.maxTotal) break;
+          instantRefill.delete(key);
+          offerImpl(key, tracked.spec);
+          if ((idle.get(key) || []).length <= before) break; // spawn 失败，等下轮巡检
+          spawned += 1;
+        }
+      }
+      if (spawned) logInfo('warm pool reconfigured', { spawned, size: cfg.size, maxTotal: cfg.maxTotal });
+      return buildStats();
     },
 
     /** 管理面：逐指纹列出池状态。rows 含 spec（内含 token，调用方映射账号后必须剔除）。 */

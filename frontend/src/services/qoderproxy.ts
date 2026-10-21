@@ -644,6 +644,79 @@ export async function clearWarmPool(): Promise<{ ok: boolean; killed: number }> 
   return check(await request('/admin/warm-pool/clear', { method: 'POST', data: {} }));
 }
 
+/** 池参数（毫秒），由设置页「参数设置」弹窗提交，未提供的字段保持不变。 */
+export interface WarmPoolConfigPayload {
+  size?: number;
+  maxTotal?: number;
+  ttlMs?: number;
+  readyMs?: number;
+  keepaliveMs?: number;
+  keepaliveWindowMs?: number;
+}
+
+/** 池参数热更新：立即生效并写入 .env，无需重启；返回新统计。 */
+export async function updateWarmPoolConfig(
+  payload: WarmPoolConfigPayload,
+): Promise<{ ok: boolean; stats: WarmPoolStats }> {
+  return check(await request('/admin/warm-pool/config', { method: 'POST', data: payload }));
+}
+
+// ── 控制面 daemon 常驻池（模型/用量查询） ─────────────────────────────────────
+
+/** 常驻 daemon 单条（账号列由服务端从 PAT 反查，不回传 token）。 */
+export interface DaemonPoolEntry {
+  key: string;
+  accountId: number | null;
+  accountName: string | null;
+  state: string;
+  lastUsedAgoMs: number;
+  nextReclaimMs: number;
+}
+
+export interface DaemonPoolStats {
+  enabled: boolean;
+  ttlMs: number;
+  count: number;
+}
+
+export async function getDaemonPool(): Promise<{
+  ok: boolean;
+  stats: DaemonPoolStats;
+  entries: DaemonPoolEntry[];
+}> {
+  return check(await request('/admin/daemon-pool', { method: 'GET' }));
+}
+
+/** daemon 池参数热更新：开关 + 空闲回收 TTL，立即生效并写入 .env。 */
+export async function updateDaemonPoolConfig(payload: {
+  enabled?: boolean;
+  ttlMs?: number;
+}): Promise<{ ok: boolean; stats: DaemonPoolStats }> {
+  return check(await request('/admin/daemon-pool/config', { method: 'POST', data: payload }));
+}
+
+/** 手动回收常驻 daemon：key 省略则全部，下次查询自动重建。 */
+export async function dropDaemonPool(key?: string): Promise<{ ok: boolean; dropped: number }> {
+  return check(await request('/admin/daemon-pool/drop', { method: 'POST', data: key ? { key } : {} }));
+}
+
+// ── 全局模型参数（推理默认值） ─────────────────────────────────────────────────
+
+/** 全局模型参数提交体：空串/空值表示清除回默认；未提供的字段保持不变。 */
+export interface ModelDefaultsPayload {
+  reasoningEffort?: string;
+  contextWindow?: number | '';
+  maxOutputTokens?: number | '';
+  timeoutMs?: number | '';
+}
+
+/** 模型参数热更新：立即生效并写入 .env，无需重启；返回当前生效默认值。 */
+export async function updateModelDefaults(
+  payload: ModelDefaultsPayload,
+): Promise<{ ok: boolean; defaults: RuntimeDefaults }> {
+  return check(await request('/admin/model-defaults', { method: 'POST', data: payload }));
+}
+
 export type LogLevel = 'info' | 'warn' | 'error';
 
 export interface LogEntry {

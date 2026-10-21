@@ -131,7 +131,7 @@ async function getDaemon(keyInput, startOptions) {
 
   const promise = (async () => {
     const daemon = await startDaemon(startOptions);
-    const entry = { daemon, lastUsedAt: Date.now(), timer: null };
+    const entry = { daemon, lastUsedAt: Date.now(), timer: null, token: keyInput.token };
     entries.set(key, entry);
     scheduleTtl(key, entry);
     logInfo('daemon ready', { key });
@@ -159,4 +159,61 @@ function shutdown() {
 }
 process.once('exit', shutdown);
 
-module.exports = { getDaemon, drop, shutdown, isEnabled, ttlMs, keyFor };
+/** 管理接口统计：不回传 token（仅供 admin-api 反查账号后脱敏输出）。 */
+function stats() {
+  const now = Date.now();
+  const ttl = ttlMs();
+  return {
+    enabled: isEnabled(),
+    ttlMs: ttl,
+    entries: [...entries.entries()].map(([key, entry]) => ({
+      key,
+      state: entry.daemon ? entry.daemon.state : 'unknown',
+      token: entry.token || null,
+      lastUsedAgoMs: Math.max(0, now - entry.lastUsedAt),
+      nextReclaimMs: Math.max(0, ttl - (now - entry.lastUsedAt)),
+    })),
+  };
+}
+
+/** 运行时改参：重读 env 后按新 TTL 重排全部回收定时器；池被关闭时全量回收。 */
+function reconfigure() {
+  if (!isEnabled()) {
+    for (const [key, entry] of [...entries.entries()]) {
+      stopEntry(key, entry, 'disabled');
+    }
+    return stats();
+  }
+  for (const [key, entry] of entries) scheduleTtl(key, entry);
+  return stats();
+}
+
+/** 按指纹回收单个常驻 daemon；返回是否命中。 */
+async function dropByKey(key) {
+  const entry = entries.get(key);
+  if (!entry) return false;
+  await stopEntry(key, entry, 'manual-drop');
+  return true;
+}
+
+/** 手动回收全部常驻 daemon（管理页「回收全部」）。 */
+async function dropAll() {
+  const n = entries.size;
+  for (const [key, entry] of [...entries.entries()]) {
+    await stopEntry(key, entry, 'manual-drop-all');
+  }
+  return n;
+}
+
+module.exports = {
+  getDaemon,
+  drop,
+  shutdown,
+  isEnabled,
+  ttlMs,
+  keyFor,
+  stats,
+  reconfigure,
+  dropByKey,
+  dropAll,
+};

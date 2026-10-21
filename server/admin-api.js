@@ -16,6 +16,7 @@
  */
 
 const express = require('express');
+const fs = require('fs');
 const { AppError, openAiError } = require('./errors');
 const { adminGuard } = require('./auth');
 const dbModule = require('./db');
@@ -25,6 +26,8 @@ const usageStore = require('./stores/usage');
 const balancer = require('./balancer');
 const qoderCli = require('./qoder-engine');
 const warmPool = require('./warm-pool');
+const daemonPool = require('./daemon-pool');
+const envManager = require('./env-manager');
 const { getLogs, clearLogs } = require('./logger');
 const { MODELS } = require('./models');
 
@@ -710,30 +713,7 @@ function createAdminApi() {
    * 供生成/编辑密钥表单预填，减少手动输入。
    */
   router.get('/runtime-defaults', adminGuard, (_req, res) => {
-    const pick = (key) => {
-      try {
-        const v = db.getConfig(key);
-        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
-      } catch (_) {
-        // config 表不可用时退回环境变量
-      }
-      const e = process.env[key];
-      return e && String(e).trim() !== '' ? String(e).trim() : null;
-    };
-    const num = (key) => {
-      const v = pick(key);
-      return v === null ? null : Number(v) || null;
-    };
-    res.json({
-      ok: true,
-      defaults: {
-        baseUrl: pick('QODERCN_BASE_URL') || '',
-        reasoningEffort: pick('QODERCN_REASONING_EFFORT'),
-        contextWindow: num('QODERCN_CONTEXT_WINDOW'),
-        maxOutputTokens: num('QODERCN_MAX_OUTPUT_TOKENS'),
-        timeoutMs: num('QODERCN_TIMEOUT_MS') ?? 300000,
-      },
-    });
+    res.json({ ok: true, defaults: currentModelDefaults() });
   });
 
   /**
@@ -828,6 +808,175 @@ function createAdminApi() {
   /** 清空热池：杀掉全部空闲热进程并清空保温表。 */
   router.post('/warm-pool/clear', adminGuard, (_req, res) => {
     res.json({ ok: true, killed: warmPool.defaultPool.clear() });
+  });
+
+  /** 池参数热更新：字段 → 环境变量（范围校验），运行时立即生效并写入 .env
+   *  持久化（无需重启；TTL 新值对之后回收的进程生效，缩上限随回收收敛）。 */
+  const POOL_PARAM_SCHEMA = {
+    size: { env: 'QODER_WARM_POOL_SIZE', min: 0, max: 50 },
+    maxTotal: { env: 'QODER_WARM_POOL_MAX_TOTAL', min: 0, max: 100 },
+    ttlMs: { env: 'QODER_WARM_POOL_TTL_MS', min: 30_000, max: 86_400_000 },
+    readyMs: { env: 'QODER_WARM_POOL_READY_MS', min: 0, max: 120_000 },
+    keepaliveMs: { env: 'QODER_WARM_POOL_KEEPALIVE_MS', min: 0, max: 3_600_000 },
+    keepaliveWindowMs: { env: 'QODER_WARM_POOL_KEEPALIVE_WINDOW_MS', min: 0, max: 2_592_000_000 },
+  };
+
+  router.post('/warm-pool/config', adminGuard, (req, res) => {
+    const body = req.body || {};
+    const updates = {};
+    const applied = {};
+    for (const [field, spec] of Object.entries(POOL_PARAM_SCHEMA)) {
+      if (!(field in body)) continue;
+      const num = Number(body[field]);
+      if (!Number.isInteger(num) || num < spec.min || num > spec.max) {
+        return fail(
+          res,
+          new AppError(400, 'invalid_request', `${field} 须为 ${spec.min}-${spec.max} 的整数`),
+        );
+      }
+      updates[spec.env] = String(num);
+      applied[field] = num;
+    }
+    if (Object.keys(updates).length === 0) {
+      return fail(res, new AppError(400, 'invalid_request', 'no valid pool params provided'));
+    }
+    for (const [envKey, value] of Object.entries(updates)) process.env[envKey] = value;
+    // 回归测试会把 .env 挪走：文件不存在时仅运行时生效，不落盘。
+    if (fs.existsSync(envManager.ENV_PATH)) envManager.writeEnvBatch(updates);
+    const stats = warmPool.defaultPool.reconfigure();
+    res.json({ ok: true, stats, applied });
+  });
+
+  // ── 控制面 daemon 常驻池（模型/用量查询） ─────────────────────────────────
+
+  /** 当前生效默认值（config 表 → 环境变量 → 内置默认）的统一读取器，
+   *  供 runtime-defaults 与 model-defaults 保存后回读共用。 */
+  const pickConfigEnv = (key) => {
+    try {
+      const v = dbModule.getConfig(key);
+      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+    } catch (_) {
+      // config 表不可用时退回环境变量
+    }
+    const e = process.env[key];
+    return e && String(e).trim() !== '' ? String(e).trim() : null;
+  };
+  const currentModelDefaults = () => {
+    const num = (key) => {
+      const v = pickConfigEnv(key);
+      return v === null ? null : Number(v) || null;
+    };
+    return {
+      baseUrl: pickConfigEnv('QODERCN_BASE_URL') || '',
+      reasoningEffort: pickConfigEnv('QODERCN_REASONING_EFFORT'),
+      contextWindow: num('QODERCN_CONTEXT_WINDOW'),
+      maxOutputTokens: num('QODERCN_MAX_OUTPUT_TOKENS'),
+      timeoutMs: num('QODERCN_TIMEOUT_MS') ?? 300000,
+    };
+  };
+
+  /** 常驻 daemon 列表：token 反查账号后脱敏输出（token 永不回传）。 */
+  router.get('/daemon-pool', adminGuard, (_req, res) => {
+    const raw = daemonPool.stats();
+    const accounts = poolAccountIndex();
+    const entries = raw.entries.map((e) => {
+      const account = e.token && accounts.get(e.token);
+      return {
+        key: e.key,
+        accountId: account ? account.id : null,
+        accountName: account ? account.name : null,
+        state: e.state,
+        lastUsedAgoMs: e.lastUsedAgoMs,
+        nextReclaimMs: e.nextReclaimMs,
+      };
+    });
+    res.json({
+      ok: true,
+      stats: { enabled: raw.enabled, ttlMs: raw.ttlMs, count: entries.length },
+      entries,
+    });
+  });
+
+  /** daemon 池参数热更新：开关 + 空闲回收 TTL，运行时立即生效并写入 .env。 */
+  router.post('/daemon-pool/config', adminGuard, (req, res) => {
+    const body = req.body || {};
+    const updates = {};
+    if ('enabled' in body) {
+      if (typeof body.enabled !== 'boolean') {
+        return fail(res, new AppError(400, 'invalid_request', 'enabled 须为布尔值'));
+      }
+      updates.QODER_DAEMON_POOL = body.enabled ? '1' : '0';
+    }
+    if ('ttlMs' in body) {
+      const num = Number(body.ttlMs);
+      if (!Number.isInteger(num) || num < 10_000 || num > 604_800_000) {
+        return fail(res, new AppError(400, 'invalid_request', 'ttlMs 须为 10000-604800000 的整数'));
+      }
+      updates.QODER_DAEMON_TTL_MS = String(num);
+    }
+    if (Object.keys(updates).length === 0) {
+      return fail(res, new AppError(400, 'invalid_request', 'no valid daemon pool params provided'));
+    }
+    for (const [envKey, value] of Object.entries(updates)) process.env[envKey] = value;
+    // 回归测试会把 .env 挪走：文件不存在时仅运行时生效，不落盘。
+    if (fs.existsSync(envManager.ENV_PATH)) envManager.writeEnvBatch(updates);
+    const raw = daemonPool.reconfigure();
+    res.json({
+      ok: true,
+      stats: { enabled: raw.enabled, ttlMs: raw.ttlMs, count: raw.entries.length },
+      applied: updates,
+    });
+  });
+
+  /** 手动回收常驻 daemon：带 key 回收单个，否则全部（下次查询自动重建）。 */
+  router.post('/daemon-pool/drop', adminGuard, async (req, res) => {
+    const key = String((req.body || {}).key || '').trim();
+    try {
+      const dropped = key ? (await daemonPool.dropByKey(key) ? 1 : 0) : await daemonPool.dropAll();
+      res.json({ ok: true, dropped });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  // ── 全局模型参数（推理默认值） ─────────────────────────────────────────────
+  /** 热更新：qoder-session 每次请求实时读 process.env，写入即生效；
+   *  持久化 .env（同 .env 文件侧真源约定），不写 config 表（与热池参数一致）。 */
+  router.post('/model-defaults', adminGuard, (req, res) => {
+    const body = req.body || {};
+    const updates = {};
+    const errors = [];
+
+    if ('reasoningEffort' in body) {
+      const v = String(body.reasoningEffort ?? '').trim();
+      if (v !== '' && !['low', 'medium', 'high'].includes(v)) {
+        errors.push('reasoningEffort 须为空或 low/medium/high');
+      } else updates.QODERCN_REASONING_EFFORT = v;
+    }
+    const intRange = (field, envKey, min, max) => {
+      if (!(field in body)) return;
+      const raw = body[field];
+      if (raw === '' || raw === null) {
+        updates[envKey] = '';
+        return;
+      }
+      const num = Number(raw);
+      if (!Number.isInteger(num) || num < min || num > max) {
+        errors.push(`${field} 须为 ${min}-${max} 的整数或留空`);
+      } else updates[envKey] = String(num);
+    };
+    intRange('contextWindow', 'QODERCN_CONTEXT_WINDOW', 1024, 10_000_000);
+    intRange('maxOutputTokens', 'QODERCN_MAX_OUTPUT_TOKENS', 1, 1_000_000);
+    intRange('timeoutMs', 'QODERCN_TIMEOUT_MS', 1000, 3_600_000);
+
+    if (errors.length) return fail(res, new AppError(400, 'invalid_request', errors.join('；')));
+    if (Object.keys(updates).length === 0) {
+      return fail(res, new AppError(400, 'invalid_request', 'no model params provided'));
+    }
+    for (const [envKey, value] of Object.entries(updates)) process.env[envKey] = value;
+    // 回归测试会把 .env 挪走：文件不存在时仅运行时生效，不落盘。
+    if (fs.existsSync(envManager.ENV_PATH)) envManager.writeEnvBatch(updates);
+    res.json({ ok: true, defaults: currentModelDefaults() });
   });
 
   // ── System logs ─────────────────────────────────────────────────────────────
