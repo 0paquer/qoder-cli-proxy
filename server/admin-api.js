@@ -772,6 +772,64 @@ function createAdminApi() {
     });
   });
 
+  // ── 热池管理（逐指纹） ─────────────────────────────────────────────────────
+  /** PAT → 账号 反查：热池 spec 只存 token，展示时映射为账号（不回传 token）。 */
+  const poolAccountIndex = () => {
+    const map = new Map();
+    try {
+      for (const acc of accountsStore.listAccounts()) {
+        const pat = accountsStore.getPat(acc.id);
+        if (pat) map.set(pat, { id: acc.id, name: acc.name });
+      }
+    } catch (_) {
+      // 反查失败时账号列留空，不影响管理操作
+    }
+    return map;
+  };
+
+  router.get('/warm-pool', adminGuard, (_req, res) => {
+    const pool = warmPool.defaultPool;
+    const stats = pool.stats();
+    const accounts = poolAccountIndex();
+    const keys = pool.list().map((row) => {
+      const ages = row.entries.map((e) => e.ageMs);
+      const oldestAgeMs = ages.length ? Math.max(...ages) : null;
+      const account = row.spec && accounts.get(row.spec.token);
+      return {
+        key: row.key,
+        stream: !!(row.spec && Array.isArray(row.spec.args) && row.spec.args.includes('--include-partial-messages')),
+        accountId: account ? account.id : null,
+        accountName: account ? account.name : null,
+        idle: row.entries.length,
+        immature: row.entries.filter((e) => e.immature).length,
+        oldestAgeMs,
+        nextReclaimMs: oldestAgeMs == null ? null : Math.max(0, stats.ttlMs - oldestAgeMs),
+        lastSeenAgoMs: row.lastSeenAgoMs,
+        refillCooldownMs: row.refillCooldownMs,
+      };
+    });
+    res.json({ ok: true, stats, keys });
+  });
+
+  /** 手动预热：指定 key（缺省=全部已登记指纹），绕过补位冷却但守容量上限。 */
+  router.post('/warm-pool/prewarm', adminGuard, (req, res) => {
+    const key = String((req.body || {}).key || '').trim();
+    const warmed = warmPool.defaultPool.prewarm(key || undefined);
+    res.json({ ok: true, warmed });
+  });
+
+  /** 驱逐单条指纹：杀其空闲热进程并停止保温（下次请求重新学习）。 */
+  router.post('/warm-pool/evict', adminGuard, (req, res) => {
+    const key = String((req.body || {}).key || '').trim();
+    if (!key) return fail(res, new AppError(400, 'invalid_request', 'key is required'));
+    res.json({ ok: true, killed: warmPool.defaultPool.evict(key) });
+  });
+
+  /** 清空热池：杀掉全部空闲热进程并清空保温表。 */
+  router.post('/warm-pool/clear', adminGuard, (_req, res) => {
+    res.json({ ok: true, killed: warmPool.defaultPool.clear() });
+  });
+
   // ── System logs ─────────────────────────────────────────────────────────────
   /** 内存日志缓冲查询：level/search 过滤，since 增量拉取。 */
   router.get('/logs', adminGuard, (req, res) => {

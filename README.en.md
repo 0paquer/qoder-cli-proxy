@@ -174,7 +174,7 @@ Open `http://127.0.0.1:1300/ui` after starting. Login credentials live in the lo
 | Usage | Statistics by day / model / user / account, plus per-call details |
 | Playground | Real chat against a chosen account (streaming toggle) |
 | API Test | Paste an API key and exercise the full gateway path (auth → scheduling → quota → SDK call) |
-| Settings | Visual runtime configuration (port, bind host, CLI backend, …) with automatic restart on save |
+| Settings | Visual runtime configuration (port, bind host, CLI backend, …), runtime status, warm-pool management, automatic restart on save |
 
 Usage data is stored in the local SQLite database (`data/qoder-proxy.db`) and contains metadata only (model, token counts, duration, error codes) — **prompts and responses are never stored**. Token counts come partly from upstream and partly from local estimation (marked `estimated`); no accuracy is claimed. The console never displays PAT plaintext (fingerprints only).
 

@@ -1068,3 +1068,57 @@ test('login rate limiting locks the IP after repeated failures', async () => {
     resetLoginRateLimit();
   }
 });
+
+test('warm pool admin: list hides tokens, prewarm/evict/clear routes answer', async () => {
+  const app = createApp();
+  const { server, baseUrl } = await listen(app);
+  try {
+    const headers = await setupAdmin(app, baseUrl);
+
+    const pool = await (await authedFetch(baseUrl, headers, '/admin/warm-pool')).json();
+    assert.equal(pool.ok, true);
+    assert.equal(typeof pool.stats.maxTotal, 'number');
+    assert.equal(typeof pool.stats.keepaliveWindowMs, 'number');
+    assert.ok(Array.isArray(pool.keys));
+    for (const row of pool.keys) {
+      assert.equal(typeof row.key, 'string');
+      assert.equal('token' in row, false, 'pool rows must never expose tokens');
+      assert.equal('spec' in row, false, 'raw spec must not leak to the client');
+    }
+
+    const warm = await (
+      await authedFetch(baseUrl, headers, '/admin/warm-pool/prewarm', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+    ).json();
+    assert.equal(warm.ok, true);
+    assert.equal(typeof warm.warmed, 'number');
+
+    const noKey = await authedFetch(baseUrl, headers, '/admin/warm-pool/evict', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert.equal(noKey.status, 400, 'evict requires a key');
+
+    const evict = await (
+      await authedFetch(baseUrl, headers, '/admin/warm-pool/evict', {
+        method: 'POST',
+        body: JSON.stringify({ key: 'no-such-key' }),
+      })
+    ).json();
+    assert.equal(evict.ok, true);
+    assert.equal(evict.killed, 0, 'unknown key evicts nothing');
+
+    const cleared = await (
+      await authedFetch(baseUrl, headers, '/admin/warm-pool/clear', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+    ).json();
+    assert.equal(cleared.ok, true);
+    assert.equal(typeof cleared.killed, 'number');
+  } finally {
+    server.close();
+  }
+});

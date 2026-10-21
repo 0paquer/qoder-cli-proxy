@@ -593,6 +593,57 @@ export async function getRuntimeStatus(): Promise<{ ok: boolean; status: Runtime
   return check(await request('/admin/runtime-status', { method: 'GET' }));
 }
 
+/** 热池全局统计（来自 GET /admin/warm-pool 的 stats）。 */
+export interface WarmPoolStats {
+  enabled: boolean;
+  keys: number;
+  idle: number;
+  size: number;
+  maxTotal: number;
+  ttlMs: number;
+  readyMs: number;
+  keepaliveMs: number;
+  keepaliveWindowMs: number;
+  trackedSpecs: number;
+}
+
+/** 热池单条指纹（账号列由服务端从 PAT 反查，不回传 token）。 */
+export interface WarmPoolKey {
+  key: string;
+  stream: boolean;
+  accountId: number | null;
+  accountName: string | null;
+  idle: number;
+  immature: number;
+  oldestAgeMs: number | null;
+  nextReclaimMs: number | null;
+  lastSeenAgoMs: number | null;
+  refillCooldownMs: number;
+}
+
+export async function getWarmPool(): Promise<{
+  ok: boolean;
+  stats: WarmPoolStats;
+  keys: WarmPoolKey[];
+}> {
+  return check(await request('/admin/warm-pool', { method: 'GET' }));
+}
+
+/** 手动预热：key 省略则全部已登记指纹。返回实际补位数。 */
+export async function prewarmWarmPool(key?: string): Promise<{ ok: boolean; warmed: number }> {
+  return check(await request('/admin/warm-pool/prewarm', { method: 'POST', data: key ? { key } : {} }));
+}
+
+/** 驱逐单条指纹：杀其空闲热进程并停止保温。 */
+export async function evictWarmPool(key: string): Promise<{ ok: boolean; killed: number }> {
+  return check(await request('/admin/warm-pool/evict', { method: 'POST', data: { key } }));
+}
+
+/** 清空热池：杀掉全部空闲热进程并清空保温表。 */
+export async function clearWarmPool(): Promise<{ ok: boolean; killed: number }> {
+  return check(await request('/admin/warm-pool/clear', { method: 'POST', data: {} }));
+}
+
 export type LogLevel = 'info' | 'warn' | 'error';
 
 export interface LogEntry {

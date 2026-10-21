@@ -171,6 +171,50 @@ test('warm pool: defaults are SIZE=2, MAX_TOTAL=5 and permanent keepalive window
   pool.shutdown();
 });
 
+test('warm pool: list reports idle entries with age/maturity and tracked spec', () => {
+  const pool = createWarmPool({ spawnFn: () => makeFakeChild(), size: 2, maxTotal: 5, ttl: 60_000, readyMs: 30 });
+  const key = keyFor(SPEC());
+  pool.offer(key, SPEC());
+  const rows = pool.list();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].key, key);
+  assert.equal(rows[0].entries.length, 1);
+  assert.equal(rows[0].entries[0].immature, true, 'entry younger than readyMs is immature');
+  assert.ok(rows[0].lastSeenAgoMs >= 0, 'tracked spec reports lastSeen age');
+  assert.ok(rows[0].refillCooldownMs >= 0);
+  pool.shutdown();
+});
+
+test('warm pool: manual prewarm fills to size, evict forgets the fingerprint', () => {
+  const pool = createWarmPool({ spawnFn: () => makeFakeChild(), size: 2, maxTotal: 5, ttl: 60_000, readyMs: 0 });
+  const key = keyFor(SPEC());
+  pool.offer(key, SPEC());
+  assert.equal(pool.stats().idle, 1);
+  assert.equal(pool.prewarm(key), 1, 'manual prewarm tops up to size');
+  assert.equal(pool.stats().idle, 2);
+  assert.equal(pool.prewarm(key), 0, 'size cap holds for manual prewarm');
+  assert.equal(pool.evict(key), 2, 'evict kills all idle processes of the key');
+  assert.equal(pool.stats().idle, 0);
+  assert.equal(pool.list().length, 0, 'evicted fingerprint disappears from list');
+  assert.equal(pool.prewarm(key), 0, 'forgotten fingerprint cannot be prewarmed');
+  pool.shutdown();
+});
+
+test('warm pool: clear kills all idle processes and forgets all fingerprints', () => {
+  const pool = createWarmPool({ spawnFn: () => makeFakeChild(), size: 2, maxTotal: 5, ttl: 60_000, readyMs: 0 });
+  const a = keyFor(SPEC({ token: 'pat-A' }));
+  const b = keyFor(SPEC({ token: 'pat-B' }));
+  pool.offer(a, SPEC({ token: 'pat-A' }));
+  pool.offer(b, SPEC({ token: 'pat-B' }));
+  assert.equal(pool.stats().idle, 2);
+  assert.equal(pool.clear(), 2);
+  assert.equal(pool.stats().idle, 0, 'clear kills every idle process');
+  assert.equal(pool.stats().trackedSpecs, 0, 'clear forgets every fingerprint');
+  assert.equal(pool.list().length, 0);
+  assert.equal(pool.prewarm(), 0, 'nothing to prewarm after clear');
+  pool.shutdown();
+});
+
 test('warm pool: keepalive respawns lost idle processes within window', async () => {
   let spawned = 0;
   let child;

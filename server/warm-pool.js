@@ -285,6 +285,31 @@ function createWarmPool({
       : null;
   keepaliveTimer?.unref?.();
 
+  /** 杀掉某指纹的全部空闲进程。调用方须先删 spec，否则归零钩子会重建。
+   *  返回杀掉的进程数。 */
+  function killIdleOfKey(key) {
+    const list = idle.get(key);
+    if (!list) return 0;
+    let killed = 0;
+    for (const entry of list.slice()) {
+      removeEntry(key, entry);
+      try {
+        entry.child.kill();
+        killed += 1;
+      } catch (_) {
+        // 进程可能已退出。
+      }
+    }
+    idle.delete(key);
+    return killed;
+  }
+
+  function killAllIdle() {
+    let killed = 0;
+    for (const key of Array.from(idle.keys())) killed += killIdleOfKey(key);
+    return killed;
+  }
+
   return {
     /** 取走一个成热的热进程（child-like 对象）；无可发放进程返回 null。不自动补位。 */
     acquire(key) {
@@ -331,6 +356,75 @@ function createWarmPool({
         keepaliveWindowMs: cfg.keepaliveWindow,
         trackedSpecs: specs.size,
       };
+    },
+
+    /** 管理面：逐指纹列出池状态。rows 含 spec（内含 token，调用方映射账号后必须剔除）。 */
+    list() {
+      const now = Date.now();
+      const rows = new Map();
+      for (const [key, tracked] of specs) {
+        rows.set(key, {
+          key,
+          spec: tracked.spec,
+          lastSeenAgoMs: now - tracked.lastSeen,
+          entries: [],
+        });
+      }
+      for (const [key, list] of idle) {
+        let row = rows.get(key);
+        if (!row) {
+          row = { key, spec: null, lastSeenAgoMs: null, entries: [] };
+          rows.set(key, row);
+        }
+        row.entries = list.map((e) => ({
+          ageMs: now - e.spawnedAt,
+          immature: now - e.spawnedAt < cfg.readyMs,
+        }));
+      }
+      for (const row of rows.values()) {
+        const last = instantRefill.get(row.key) || 0;
+        row.refillCooldownMs = Math.max(0, 30_000 - (now - last));
+      }
+      return Array.from(rows.values());
+    },
+
+    /** 手动预热：为指定（省略则全部）已登记指纹补进程，绕过 30s 补位冷却，
+     *  仍受 size / maxTotal 容量上限约束。返回实际补位数。 */
+    prewarm(key) {
+      if (stopped) return 0;
+      const targets = key ? [key] : Array.from(specs.keys());
+      let spawned = 0;
+      for (const k of targets) {
+        const tracked = specs.get(k);
+        if (!tracked) continue;
+        const before = (idle.get(k) || []).length;
+        instantRefill.delete(k); // 手动操作不吃冷却
+        offerImpl(k, tracked.spec);
+        spawned += (idle.get(k) || []).length - before;
+      }
+      if (spawned) logInfo('warm pool manual prewarm', { requested: targets.length, spawned });
+      return spawned;
+    },
+
+    /** 驱逐指纹：杀其空闲热进程并从保温表移除（请求中的 taken 进程不受影响）。
+     *  返回杀掉的进程数。 */
+    evict(key) {
+      const hadSpec = specs.delete(key);
+      instantRefill.delete(key);
+      const killed = killIdleOfKey(key);
+      logInfo('warm pool evicted', { key, hadSpec, killed });
+      return killed;
+    },
+
+    /** 清空热池：杀掉全部空闲热进程并清空保温表（下次请求重新学习）。
+     *  返回杀掉的进程数。 */
+    clear() {
+      // 先清保温表再杀进程：否则归零钩子会按 spec 立即重建。
+      specs.clear();
+      instantRefill.clear();
+      const killed = killAllIdle();
+      logInfo('warm pool cleared', { killed });
+      return killed;
     },
 
     shutdown() {
