@@ -33,7 +33,7 @@ Two backends are supported:
 - **Users & keys**: multiple gateway users, `qk-`-prefixed API keys per user, per-user account grants and quotas (daily/monthly, requests/tokens); keys can be revealed after creation (encrypted copy stored)
 - **Usage audit**: every call records model, account, user, token usage, duration, and error code (SQLite, no prompt bodies)
 - **Dual protocol egress**: OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`, both with streaming and tool-call field adaptation
-- **Admin console**: accounts, users & keys, usage statistics, playground, API test, settings
+- **Admin console**: accounts, users & keys, usage statistics, playground, API test, process pools, system logs, settings
 
 ## Quick Start
 
@@ -152,16 +152,6 @@ $env:ANTHROPIC_AUTH_TOKEN = "your qk- key"   # any value while zero keys exist
 
 Do not append `/v1` to `ANTHROPIC_BASE_URL`; clients usually add API paths automatically.
 
-### OpenCode Example
-
-The repository includes `opencode.json` for local compatibility verification:
-
-```powershell
-opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
-```
-
-If you have issued `qk-` keys, replace `not-used` in `opencode.json`'s `options.apiKey` with your key.
-
 ## Admin Console
 
 Open `http://127.0.0.1:1300/ui` after starting. Login credentials live in the local SQLite database; a regular user with zero grants cannot call the gateway.
@@ -174,7 +164,9 @@ Open `http://127.0.0.1:1300/ui` after starting. Login credentials live in the lo
 | Usage | Statistics by day / model / user / account, plus per-call details |
 | Playground | Real chat against a chosen account (streaming toggle) |
 | API Test | Paste an API key and exercise the full gateway path (auth → scheduling → quota → SDK call) |
-| Settings | Visual runtime configuration (port, bind host, CLI backend, …), runtime status, warm-pool management, automatic restart on save |
+| Process Pools | Conversation warm pool (fingerprints / prewarm / evict / pool parameters), control-plane daemon pool (resident entries / reclaim / TTL), global model parameters (effort / context window / output / timeout) |
+| System Logs | Request and error logs (redacted), viewable and clearable |
+| Settings | Visual runtime configuration (port, bind host, CLI backend, …), runtime status, automatic restart on save |
 
 Usage data is stored in the local SQLite database (`data/qoder-proxy.db`) and contains metadata only (model, token counts, duration, error codes) — **prompts and responses are never stored**. Token counts come partly from upstream and partly from local estimation (marked `estimated`); no accuracy is claimed. The console never displays PAT plaintext (fingerprints only).
 
@@ -194,6 +186,8 @@ Both formats include tool-call field adaptation (`tool_calls` / `tool_use`) for 
 Because the CLI only handles text and has no native tool-calling channel, this project implements tool-call adaptation through prompt format instructions and output parsing: tool definitions are added as formatting guidance, then JSON tool calls are extracted from model text output.
 
 This is different from calling official OpenAI, Anthropic, DeepSeek, or similar APIs. Official APIs usually provide a native `tools` parameter channel. This project only simulates protocol behavior at the text layer and should not be treated as an equivalent replacement.
+
+Tool definitions are injected per request: **the client should include `tools` on every turn**. Any turn without a `tools` field has no tool definitions in the prompt, and the model may answer that it has no usable tools (services using the native `tools` protocol are unaffected, because tools and historical `tool_calls` are structured and persistent).
 
 ### Streaming
 
@@ -223,7 +217,7 @@ Switch backends via `CLI_BACKEND` in `.env`; restart to take effect:
 
 ### Reasoning Options
 
-Global defaults via environment variables:
+Global defaults via environment variables — editable in the admin console under **Process Pools → Model Parameters** (saved values take effect immediately, are written back to `.env`, and need no restart; key-level and per-request overrides win over them):
 
 ```powershell
 $env:QODERCN_REASONING_EFFORT = "high"
@@ -237,9 +231,11 @@ Or specify per request via `reasoning_effort`, `context_window`, and `max_tokens
 
 - `PORT` / `BIND_HOST`: listen port and address (default `127.0.0.1:1300`)
 - `QODERCN_TIMEOUT_MS`: per-request timeout in milliseconds. Proxy prompts plus model queueing can take several minutes, so keep this generous (default 300000; `.env.example` suggests 600000)
-- `QODERCN_CLI_TOOLS`: the CLI's built-in tools are disabled by default (`--tools=` is appended) so the model answers directly instead of running file/shell loops in the proxy's own directory. Set to `1` to keep them
 - Warm pool: `QODER_WARM_POOL=0` disables it entirely; `QODER_WARM_POOL_SIZE` / `QODER_WARM_POOL_MAX_TOTAL` / `QODER_WARM_POOL_TTL_MS` / `QODER_WARM_POOL_READY_MS` tune size, cap, TTL, and the maturity threshold (see `.env.example`)
+- Control-plane daemon pool: one resident SDK daemon per account for hot model-catalog and quota queries (skipping the ~7 s startup); `QODER_DAEMON_POOL=0` disables it, `QODER_DAEMON_TTL_MS` sets idle reclamation (default 4 h, floor 10 s)
 - Diagnostics: `LOG_REQUESTS=1` logs every failed request (redacted)
+
+All pool and model parameters above are editable on the admin console's **Process Pools** page — changes take effect hot and are written back to `.env`; unset values fall back to built-in defaults. The CLI's built-in tools are disabled by default (`tools: []` passed to the SDK, equivalent to `--tools=`), so the model cannot run file/shell loops in the proxy's own directory; gateway-side tool calling is described under How It Works.
 
 ### Supported Models
 

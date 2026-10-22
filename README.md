@@ -18,7 +18,7 @@
 - **预热进程池**：热响应约 3 秒（冷启动 12-17 秒）；启动预热 + 空闲保温 + 切换模型按需预热
 - **用户与配额**：多网关用户、`qk-` API Key、按用户授权账号与日/月配额（请求数 / token 数）
 - **额度与审计**：额度查询零 credits 消耗；每次调用记录模型、账号、用量、耗时，不存 prompt 正文
-- **管理控制台**：账号、用户与密钥、用量统计、测试对话、调用测试、系统设置
+- **管理控制台**：账号、用户与密钥、用量统计、测试对话、调用测试、进程池、系统日志、系统设置
 
 对话执行由 [@qoder-ai/qoder-agent-sdk](https://www.npmjs.com/package/@qoder-ai/qoder-agent-sdk) 驱动。支持两个后端：**CN**（`qoderclicn` → qoder.com.cn，PAT 认证）与 **Global**（`qodercli` → qoder.com，OAuth 登录），由 `CLI_BACKEND` 切换。
 
@@ -83,25 +83,19 @@ $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:1300"   # 不要追加 /v1，客户�
 $env:ANTHROPIC_AUTH_TOKEN = "你的 qk- 密钥"
 ```
 
-**OpenCode**（仓库自带 `opencode.json`，本地验证用）：
-
-```powershell
-opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
-```
-
-签发过 `qk-` 密钥的话，把 `opencode.json` 里的 `apiKey` 从 `not-used` 换成你的密钥。
-
 ## 管理控制台
 
 | 页面 | 说明 |
 |-----|------|
 | 仪表盘 | 今日 / 累计调用量、账号与密钥概览 |
 | 账号管理 | 添加账号（PAT 加密入库）、验证、剩余额度、权重 / 并发 / 冷却状态 |
-| 用户与密钥 | 网关用户、`qk-` 密钥发放与吊销、按用户授权账号与配额 |
+| 用户密钥 | 网关用户、`qk-` 密钥发放与吊销、按用户授权账号与配额 |
 | 用量记录 | 按天 / 模型 / 用户 / 账号统计与调用明细 |
 | 测试对话 | 指定账号直接对话（流式 / 非流式切换） |
 | 调用测试 | 粘贴 API Key 走完整网关链路（鉴权 → 调度 → 配额） |
-| 系统设置 | 可视化编辑运行配置、运行状态、预热进程池管理，保存后自动重启 |
+| 进程池 | 对话预热池（指纹 / 预热 / 驱逐 / 池参数）、控制面 daemon 池（常驻条目 / 回收 / TTL）、全局模型参数（思考深度 / 上下文 / 输出 / 超时） |
+| 系统日志 | 请求与错误日志（自动脱敏），支持查看与清空 |
+| 系统设置 | 可视化编辑运行配置、运行状态，保存后自动重启 |
 
 用量存于本机 `data/qoder-proxy.db`，只记元数据（模型、token 数、耗时、错误码），**不保存 prompt 与响应正文**；token 数部分为本地估算（标记 `estimated`）。控制台不显示 PAT 明文（仅指纹）。
 
@@ -109,7 +103,7 @@ opencode run --model qoder-cn-local/qwen3.8-max --variant high "reply OK"
 
 CLI 只接受文本进出，本项目作为本地适配层：接收 OpenAI / Anthropic 格式请求，经 Agent SDK 转为 CLI 会话调用（prompt 走 stdin 流式协议，预热池提供热进程），再把输出整理为兼容格式响应。
 
-**工具调用**是 Prompt 格式指令 + 输出解析实现的文本层适配，不是模型原生能力——与官方 API 的 `tools` 参数通道不同，不应视为等价替代；模型输出非法 JSON 或拒绝工具格式时降级为纯文本。流式时回复文本经门控实时转发（暂扣仍可能长成工具 JSON 的尾部），工具调用在流末尾一次性补齐——因此未闭合的代码围栏会暂扣到闭合后再显示（宁可延迟，绝不把工具 JSON 泄漏为文本）。
+**工具调用**是 Prompt 格式指令 + 输出解析实现的文本层适配，不是模型原生能力——与官方 API 的 `tools` 参数通道不同，不应视为等价替代；模型输出非法 JSON 或拒绝工具格式时降级为纯文本。**工具定义按请求注入：客户端应每一轮都携带 `tools`**，某一轮不带即该轮没有工具定义，模型可能因此声称"没有可用工具"（原生 `tools` 协议的模型服务不受此影响，因为工具与历史 `tool_calls` 是结构化常驻的）。流式时回复文本经门控实时转发（暂扣仍可能长成工具 JSON 的尾部），工具调用在流末尾一次性补齐——因此未闭合的代码围栏会暂扣到闭合后再显示（宁可延迟，绝不把工具 JSON 泄漏为文本）。
 
 当前限制：
 
@@ -127,7 +121,7 @@ CLI 只接受文本进出，本项目作为本地适配层：接收 OpenAI / Ant
 | 认证方式 | PAT（账号管理页添加，加密入库） | `qodercli login`（OAuth，无需配置） |
 | 认证目录 | `~/.qoderworkcn` | `~/.qoder` |
 
-**推理参数**（全局默认；也可按请求用 `reasoning_effort` / `context_window` / `max_tokens` 单独覆盖）：
+**推理参数**（全局默认，可在控制台「进程池 → 模型参数」页修改，保存即生效并写入 `.env`、无需重启；密钥级 / 请求级设置优先于此）。也可按请求用 `reasoning_effort` / `context_window` / `max_tokens` 单独覆盖：
 
 ```powershell
 $env:QODERCN_REASONING_EFFORT = "high"
@@ -139,9 +133,11 @@ $env:QODERCN_MAX_OUTPUT_TOKENS = "4096"
 
 - `PORT` / `BIND_HOST`：监听端口与地址（默认 `127.0.0.1:1300`）
 - `QODERCN_TIMEOUT_MS`：单次请求超时，默认 300000（代理提示词 + 排队可能耗数分钟，不建议调小）
-- `QODERCN_CLI_TOOLS=1`：恢复 CLI 内置工具（默认禁用，避免模型在代理目录里跑文件 / shell 循环）
 - 预热池：`QODER_WARM_POOL=0` 整体关闭；`QODER_WARM_POOL_SIZE` / `_MAX_TOTAL` / `_TTL_MS` / `_READY_MS` 调节池容量与回收，详见 `.env.example`
+- 控制面 daemon 池：每账号常驻 SDK daemon，供模型目录与额度热查询（免约 7 秒初始化）；`QODER_DAEMON_POOL=0` 关闭，`QODER_DAEMON_TTL_MS` 空闲回收（默认 4 小时，下限 10 秒）
 - `LOG_REQUESTS=1`：记录每个失败请求（脱敏后）
+
+以上池参数与模型参数均已在控制台「进程池」页提供可视化配置，改完即热生效并写回 `.env`；配置文件里未设置的项才回退到内置默认。CLI 内置工具默认禁用（`tools: []` 传给 SDK，等价 `--tools=`），避免模型在代理目录里跑文件 / shell 循环，网关侧工具调用见「工作原理与限制」。
 
 **支持的模型**：`qoder-cn`、`auto`、`ultimate`、`performance`、`efficient`、`lite`、`cantus`、`qwen3.8-max`、`qwen3.8-flash`、`qwen3.7-max`、`qwen3.7-plus`、`kimi-k3`、`kimi-k2.7-code`、`glm-5.3`、`glm-5.3-flash`、`deepseek-v4-pro`、`deepseek-v4-flash`、`minimax-m3`；推理强度别名 `qwen3.8-max-effort-low|-medium|-high|-max`（`qwen3.7-max` 同理）。
 
